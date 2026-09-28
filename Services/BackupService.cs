@@ -23,8 +23,15 @@ public class BackupService
     /// <summary>推送失败时的自动重试次数（如无法弹窗或用户选择重试时的兜底）。</summary>
     public const int MaxPushRetries = 3;
 
-    private void Emit(string msg) => Log?.Invoke($"[{DateTime.Now:HH:mm:ss}] {msg}");
+    private void Emit(string msg) => Log?.Invoke($"[{DateTime.Now:HH:mm:ss}] {MaskToken(msg)}");
     private void Stage(string msg) => StageChanged?.Invoke(msg);
+
+    /// <summary>日志脱敏：内置登录的 token 可能出现在 git 输出（如推送地址）里，统一替换掉。</summary>
+    private static string MaskToken(string text)
+    {
+        var token = GitHubAuthService.LoadToken();
+        return string.IsNullOrEmpty(token) ? text : text.Replace(token, "***");
+    }
 
     /// <summary>执行一个备份任务，更新其 LastStatus/LastBackupAt。返回是否成功。</summary>
     public bool RunJob(BackupJob job, Settings settings)
@@ -227,8 +234,22 @@ public class BackupService
         return $"{owner}/{name}";
     }
 
+    /// <summary>
+    /// 构造远程地址：内置登录（OAuth）时携带 token，确保 git push 使用与建仓相同的账号；
+    /// 未登录时返回匿名 HTTPS 地址（由 git 自身凭据配置决定）。
+    /// </summary>
+    private static string BuildRemoteUrl(string repoFull)
+    {
+        var token = GitHubAuthService.LoadToken();
+        return string.IsNullOrEmpty(token)
+            ? $"https://github.com/{repoFull}.git"
+            : $"https://x-access-token:{token}@github.com/{repoFull}.git";
+    }
+
     private void EnsureRemote(string dir, string repoFull)
     {
+        // origin 保持匿名地址，避免把 token 写进本地 .git/config
+        // （独立式是用户自己的项目仓库，写 token 有泄露风险；push 时用临时地址即可）
         var url = $"https://github.com/{repoFull}.git";
         if (GitService.CheckRemote(dir).Succeeded)
             GitService.SetRemote(dir, url);
@@ -290,9 +311,17 @@ public class BackupService
     /// </summary>
     private bool PushWithRetry(string dir, string branch, string repoFull)
     {
+        // 内置登录（OAuth）时用带 token 的临时地址推送，确保 push 与建仓使用同一账号；
+        // 否则 git 会走本地 credential helper，可能是另一个 gh 账号，导致 403。
+        // 该地址只在命令行使用，**不写入本地 git 配置**。
+        var pushUrl = BuildRemoteUrl(repoFull);
+        var authed = pushUrl.Contains("x-access-token:", StringComparison.Ordinal);
+
         for (int attempt = 1; attempt <= MaxPushRetries; attempt++)
         {
-            var push = GitService.Push(dir, branch, setUpstream: true);
+            var push = authed
+                ? GitService.PushTo(dir, pushUrl, branch)
+                : GitService.Push(dir, branch, setUpstream: true);
             if (push.Succeeded) return true;
 
             var err = push.CombinedOutput;
@@ -303,7 +332,9 @@ public class BackupService
                 // 远程有本地没有的提交（如自动创建 README 产生的提交）：先合并再重试，无需用户确认
                 Emit("ℹ 远程分支有本地未包含的提交，自动进行 pull --rebase 合并后重试...");
                 Stage($"检测到远程变更，正在合并...（{attempt}/{MaxPushRetries}）");
-                var pull = ProcessRunner.Run("git", $"pull --rebase origin {branch}", dir, timeoutMs: 120000);
+                var pull = authed
+                    ? GitService.PullRebaseFrom(dir, pushUrl, branch)
+                    : ProcessRunner.Run("git", $"pull --rebase origin {branch}", dir, timeoutMs: 120000);
                 if (!pull.Succeeded)
                 {
                     Emit($"✗ pull --rebase 失败：{pull.CombinedOutput}");

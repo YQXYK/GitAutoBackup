@@ -45,6 +45,134 @@
             <DockPanel>
                 <TextBlock Text="GitAutoBackup" FontWeight="Bold" FontSize="16"
                            Margin="18,22,18,18" DockPanel.Dock="Top" Foreground="{StaticResource TextPrimary}"/>
+
+                <!-- 左下角账号入口：头像 + 点开菜单 -->
+                <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource BorderLight}" BorderThickness="0,1,0,0" Padding="10,8">
+                    <Button x:Name="AccountButton" Click="AccountButton_Click" Cursor="Hand"
+                            Background="Transparent" BorderThickness="0" Padding="6,4"
+                            HorizontalContentAlignment="Stretch">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="bd" CornerRadius="8" Background="Transparent" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBg}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </Button.Style>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Grid Grid.Column="0" Width="30" Height="30">
+                                <Ellipse Fill="{StaticResource BorderLight}"/>
+                                <Ellipse>
+                                    <Ellipse.Fill>
+                                        <ImageBrush ImageSource="{Binding AvatarImage}" Stretch="UniformToFill"/>
+                                    </Ellipse.Fill>
+                                </Ellipse>
+                            </Grid>
+
+                            <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding AccountText}" FontSize="12" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding LoginStatusText}" FontSize="10"
+                                           Foreground="{StaticResource TextSecondary}" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+
+                            <Path Grid.Column="2" Data="M0,0 L5,4.5 L10,0" Stroke="{StaticResource TextFaint}" StrokeThickness="1.4"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" VerticalAlignment="Center"
+                                  Margin="6,0,2,0"/>
+                        </Grid>
+
+                        <Button.ContextMenu>
+                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                <ContextMenu.Style>
+                                    <Style TargetType="ContextMenu">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ContextMenu">
+                                                    <Border Background="{StaticResource AppBg}" CornerRadius="10"
+                                                            BorderBrush="{StaticResource BorderLight}" BorderThickness="1"
+                                                            Padding="4" Margin="6">
+                                                        <Border.Effect>
+                                                            <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.14" Color="#000000"/>
+                                                        </Border.Effect>
+                                                        <StackPanel IsItemsHost="True"/>
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ContextMenu.Style>
+                                <ContextMenu.Resources>
+                                    <Style TargetType="MenuItem">
+                                        <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                        <Setter Property="FontSize" Value="13"/>
+                                        <Setter Property="Padding" Value="10,7"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="MenuItem">
+                                                    <Border x:Name="bd" CornerRadius="6" Background="Transparent"
+                                                            Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsHighlighted" Value="True">
+                                                            <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBg}"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsEnabled" Value="False">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextFaint}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                    <Style TargetType="Separator">
+                                        <Setter Property="Margin" Value="0"/>
+                                        <Setter Property="Padding" Value="0"/>
+                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="Separator">
+                                                    <Grid Margin="0,5">
+                                                        <Rectangle Height="1" Fill="{StaticResource BorderLight}"
+                                                                   HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ContextMenu.Resources>
+
+                                <MenuItem Header="{Binding AccountText}" IsEnabled="False" FontWeight="SemiBold"/>
+                                <Separator/>
+                                <MenuItem Header="登录 GitHub ..." Command="{Binding LoginCommand}"
+                                          Visibility="{Binding IsLoggedIn, Converter={StaticResource InverseBoolToVis}}"/>
+                                <MenuItem Header="退出登录" Command="{Binding LogoutCommand}"
+                                          Visibility="{Binding IsLoggedIn, Converter={StaticResource BoolToVis}}"/>
+                                <MenuItem Header="解锁删除权限" Command="{Binding UnlockDeleteCommand}"/>
+                                <Separator/>
+                                <MenuItem Header="刷新账号与头像" Command="{Binding RefreshAccountCommand}"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </Border>
+
                 <ListBox ItemsSource="{Binding NavItems}"
                          SelectedItem="{Binding SelectedNavItem}"
                          BorderThickness="0" Background="Transparent"
@@ -117,7 +245,7 @@
                                             <Setter Property="FontWeight" Value="Normal"/>
                                             <Setter Property="FontSize" Value="12"/>
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsTerminalPanel}" Value="False">
+                                                <DataTrigger Binding="{Binding IsLogPanel}" Value="True">
                                                     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
                                                     <Setter Property="FontWeight" Value="SemiBold"/>
                                                 </DataTrigger>
@@ -133,6 +261,21 @@
                                             <Setter Property="FontSize" Value="12"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsTerminalPanel}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button Content="任务" Command="{Binding ShowTaskPanelCommand}" Background="Transparent" BorderThickness="0" Padding="10,4" Cursor="Hand">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                                            <Setter Property="FontWeight" Value="Normal"/>
+                                            <Setter Property="FontSize" Value="12"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsTaskPanel}" Value="True">
                                                     <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
                                                     <Setter Property="FontWeight" Value="SemiBold"/>
                                                 </DataTrigger>
@@ -156,7 +299,7 @@
                                  FontFamily="Consolas" FontSize="12" Height="180" TextWrapping="NoWrap"
                                  Background="{StaticResource PanelBg}" Foreground="{StaticResource TextPrimary}"
                                  BorderThickness="0" Padding="8,6"
-                                 Visibility="{Binding IsTerminalPanel, Converter={StaticResource InverseBoolToVis}}"/>
+                                 Visibility="{Binding IsLogPanel, Converter={StaticResource BoolToVis}}"/>
                         <Border Padding="8,6" Background="{StaticResource AppBg}"
                                 Visibility="{Binding IsTerminalPanel, Converter={StaticResource BoolToVis}}">
                             <term:EasyTerminalControl x:Name="TerminalControl"
@@ -165,6 +308,33 @@
                                                       FontSizeWhenSettingTheme="11"
                                                       Height="180"/>
                         </Border>
+                        <ListBox ItemsSource="{Binding Tasks}" Height="180" BorderThickness="0"
+                                 Background="{StaticResource PanelBg}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 Visibility="{Binding IsTaskPanel, Converter={StaticResource BoolToVis}}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding TimeText}" FontFamily="Consolas" FontSize="12"
+                                                   Foreground="{StaticResource TextFaint}" Width="66" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Title}" Width="240" TextTrimming="CharacterEllipsis"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Status}" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsFailed}" Value="True">
+                                                            <Setter Property="Foreground" Value="#A32D2D"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                     </Grid>
                 </DockPanel>
             </Border>

@@ -36,6 +36,14 @@ public static class GitService
     public static ProcessResult Push(string dir, string branch, bool setUpstream = false)
         => Run($"push -u origin {branch}", dir);
 
+    /// <summary>推送到显式 URL（不修改本地 origin 配置，用于携带 OAuth token 的临时地址）</summary>
+    public static ProcessResult PushTo(string dir, string url, string branch)
+        => Run($"push {Arg(url)} {branch}", dir);
+
+    /// <summary>从显式 URL 拉取并变基（不修改本地 origin 配置）</summary>
+    public static ProcessResult PullRebaseFrom(string dir, string url, string branch)
+        => Run($"pull --rebase {Arg(url)} {branch}", dir);
+
     public static ProcessResult CurrentBranch(string dir)
         => Run($"rev-parse --abbrev-ref HEAD", dir);
 

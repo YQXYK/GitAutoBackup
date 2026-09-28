@@ -8,6 +8,10 @@
     <UseWPF>true</UseWPF>
     <RootNamespace>GitAutoBackup</RootNamespace>
     <AssemblyName>GitAutoBackup</AssemblyName>
+    <Version>1.1.0</Version>
+    <Product>GitAutoBackup</Product>
+    <Description>图形化 Git 备份工具：把项目文件夹自动备份到 GitHub 仓库</Description>
+    <Authors>YQXYK</Authors>
   </PropertyGroup>
 
   <ItemGroup>

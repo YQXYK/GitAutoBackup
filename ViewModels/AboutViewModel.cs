@@ -4,7 +4,7 @@ namespace GitAutoBackup.ViewModels;
 public class AboutViewModel
 {
     public string AppName => "GitAutoBackup";
-    public string Version => "1.0.0";
+    public string Version => "1.1.0";
     public string Description =>
         "一个图形化 Git 备份工具：选择项目文件夹，自动备份到 GitHub 私有仓库。\n\n" +
         "支持集中式（一个仓库存所有项目）与独立式（每项目一个仓库）；\n" +

@@ -40,6 +40,17 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>点击左下角账号入口 → 在按钮上方弹出菜单。</summary>
+    private void AccountButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button { ContextMenu: { } menu } button)
+        {
+            menu.PlacementTarget = button;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+            menu.IsOpen = true;
+        }
+    }
+
     /// <summary>
     /// 在内置终端里执行命令。对 gh 设备流这类需要交互的命令：
     /// 先写入命令并回车执行，gh 会打印一次性代码并停在 "Press Enter to open ... in your browser..."，

@@ -121,19 +121,37 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
     public RelayCommand ShowLogCommand { get; }
     public RelayCommand ShowLogPanelCommand { get; }
     public RelayCommand ShowTerminalPanelCommand { get; }
+    public RelayCommand ShowTaskPanelCommand { get; }
     public RelayCommand EnvActionCommand { get; }
+    public RelayCommand LoginCommand { get; }
+    public RelayCommand LogoutCommand { get; }
+    public RelayCommand RefreshAccountCommand { get; }
 
-    /// <summary>运行环境是否就绪（git 与 gh CLI 均可用）。</summary>
-    public bool EnvOk => _gitInstalled && _ghInstalled;
+    /// <summary>是否已内置登录（OAuth token）。</summary>
+    public bool IsLoggedIn => GitHubAuthService.HasToken;
+
+    /// <summary>头像下方的状态说明。</summary>
+    public string LoginStatusText => IsLoggedIn ? "内置登录" : "未登录 · 点此登录";
+
+    private System.Windows.Media.ImageSource? _avatarImage;
+    /// <summary>用户头像（未登录或加载失败时为 null，界面回退到默认占位）。</summary>
+    public System.Windows.Media.ImageSource? AvatarImage
+    {
+        get => _avatarImage;
+        private set { _avatarImage = value; OnPropertyChanged(); }
+    }
+
+    /// <summary>运行环境是否可用。**git 必需**；gh 可选（未装时用内置登录 OAuth）。</summary>
+    public bool EnvOk => _gitInstalled;
 
     /// <summary>环境状态文本（状态栏显示）。</summary>
     public string EnvStatusText => !_envChecked
         ? "环境检查中 ..."
-        : EnvOk
-            ? "环境正常（git / gh）"
-            : !_gitInstalled && !_ghInstalled ? "缺少 git 与 gh CLI，点此下载"
-            : !_gitInstalled ? "缺少 git CLI，点此下载"
-            : "缺少 gh CLI，点此下载";
+        : !_gitInstalled
+            ? "缺少 git CLI，点此下载"
+            : _ghInstalled
+                ? "环境正常（git / gh）"
+                : "环境正常（git）· 未装 gh（可选，点此安装）";
 
     /// <summary>请求在内置终端里执行命令（由 MainWindow 订阅并写入终端）。</summary>
     public event Action<string>? TerminalCommandRequested;
@@ -161,13 +179,29 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         set => SetField(ref _isLogVisible, value);
     }
 
-    private bool _isTerminalPanel;
-    /// <summary>底部面板当前显示「终端」（false=日志，true=终端）。</summary>
-    public bool IsTerminalPanel
+    private BottomPanelTab _bottomTab = BottomPanelTab.Log;
+
+    /// <summary>底部面板当前标签（日志 / 终端 / 任务）。</summary>
+    public BottomPanelTab BottomTab
     {
-        get => _isTerminalPanel;
-        set => SetField(ref _isTerminalPanel, value);
+        get => _bottomTab;
+        set
+        {
+            if (_bottomTab == value) return;
+            _bottomTab = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsLogPanel));
+            OnPropertyChanged(nameof(IsTerminalPanel));
+            OnPropertyChanged(nameof(IsTaskPanel));
+        }
     }
+
+    public bool IsLogPanel => _bottomTab == BottomPanelTab.Log;
+    public bool IsTerminalPanel => _bottomTab == BottomPanelTab.Terminal;
+    public bool IsTaskPanel => _bottomTab == BottomPanelTab.Tasks;
+
+    /// <summary>任务记录（底部「任务」面板显示，最新在前）。</summary>
+    public ObservableCollection<TaskRecord> Tasks { get; } = new();
 
     public MainViewModel()
     {
@@ -195,9 +229,13 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         ToggleLogCommand = new RelayCommand(_ => IsLogVisible = !IsLogVisible);
         UnlockDeleteCommand = new RelayCommand(_ => UnlockDeleteScope());
         EnvActionCommand = new RelayCommand(_ => EnvAction());
+        LoginCommand = new RelayCommand(_ => StartLogin(GitHubAuthService.DefaultScope));
+        LogoutCommand = new RelayCommand(_ => Logout());
+        RefreshAccountCommand = new RelayCommand(_ => RefreshAccount(withAvatar: true));
         ShowLogCommand = new RelayCommand(_ => IsLogVisible = true);
-        ShowLogPanelCommand = new RelayCommand(_ => IsTerminalPanel = false);
-        ShowTerminalPanelCommand = new RelayCommand(_ => IsTerminalPanel = true);
+        ShowLogPanelCommand = new RelayCommand(_ => BottomTab = BottomPanelTab.Log);
+        ShowTerminalPanelCommand = new RelayCommand(_ => BottomTab = BottomPanelTab.Terminal);
+        ShowTaskPanelCommand = new RelayCommand(_ => BottomTab = BottomPanelTab.Tasks);
 
         UpdateTimer();
         LoadAccount();
@@ -224,14 +262,16 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
     private void LoadAccount()
     {
         // 启动时：仅当账号框为空时才自动检测，避免覆盖用户已手动填的值。
+        LoadAvatar();   // 先显示本地缓存头像
+        if (GitHubAuthService.HasToken) { RefreshAccount(withAvatar: true); return; }
         if (string.IsNullOrWhiteSpace(_settings.GitHubAccount))
             DetectAccount();
     }
 
     private void DetectAccount()
     {
-        RunOnUi(() => IsBusy = true);
-        AppendLog("正在自动检测 GitHub 账号...");
+        SetBusyState(true, "正在检测 GitHub 账号 ...");
+        var task = AddTask("检测 GitHub 账号");
         System.Threading.Tasks.Task.Run(() =>
         {
             var acc = GitHubService.GetAccount();
@@ -241,26 +281,131 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
                 {
                     _settings.GitHubAccount = acc;
                     OnPropertyChanged(nameof(AccountText));
-                    AppendLog($"自动检测成功：{acc}");
+                    SetBusyState(false, $"√ 已检测到账号 {acc}");
+                    CompleteTask(task, true, $"账号 {acc}");
                 }
                 else
                 {
-                    AppendLog("未检测到 GitHub 账号，请手动输入或先运行：gh auth login");
+                    SetBusyState(false, "✗ 未检测到账号");
+                    CompleteTask(task, false, "未检测到（可点「登录 GitHub」）");
+                    AppendLog("未检测到 GitHub 账号：可点「登录 GitHub」内置登录，或用 gh auth login。");
                 }
-                IsBusy = false;
                 Save();
             });
         });
     }
 
-    /// <summary>请求 delete_repo 删除权限：在内置终端里执行 gh auth refresh。</summary>
+    /// <summary>解锁删除权限：已内置登录则重新授权追加 delete_repo；否则走 gh（内置终端）。</summary>
     private void UnlockDeleteScope()
     {
-        IsTerminalPanel = true;
+        if (GitHubAuthService.HasToken)
+        {
+            AddTask("解锁删除权限（内置登录）");
+            StartLogin(GitHubAuthService.DeleteScope);
+            return;
+        }
+
+        BottomTab = BottomPanelTab.Terminal;
         IsLogVisible = true;
+        var task = AddTask("解锁删除权限（gh 方式）");
         AppendLog("正在内置终端里请求删除仓库权限（delete_repo），请在终端里按提示完成授权...");
         StatusText = "等待浏览器授权...";
         TerminalCommandRequested?.Invoke("gh auth refresh -s delete_repo -h github.com");
+        CompleteTask(task, true, "已发起，请在终端完成授权");
+    }
+
+    /// <summary>内置登录：申请设备码 → 弹框等待授权 → 保存 token → 拉取账号与头像。</summary>
+    private void StartLogin(string scope)
+    {
+        var task = AddTask("登录 GitHub");
+        SetBusyState(true, "正在获取设备码 ...");
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var info = GitHubAuthService.RequestDeviceCode(scope, out var error);
+            RunOnUi(() =>
+            {
+                SetBusyState(false, "就绪");
+                if (info == null)
+                {
+                    CompleteTask(task, false, "获取设备码失败");
+                    AppendLog("获取设备码失败：" + error);
+                    return;
+                }
+
+                var dlg = new Views.LoginDialog(info)
+                {
+                    Owner = System.Windows.Application.Current?.MainWindow
+                };
+                if (dlg.ShowDialog() == true && !string.IsNullOrEmpty(dlg.Token))
+                {
+                    GitHubAuthService.SaveToken(dlg.Token);
+                    CompleteTask(task, true, "已登录");
+                    SetBusyState(false, "√ 已登录 GitHub");
+                    RefreshAccount(withAvatar: true);
+                }
+                else
+                {
+                    CompleteTask(task, false, "已取消");
+                }
+            });
+        });
+    }
+
+    /// <summary>退出内置登录（之后回退到 gh CLI）。</summary>
+    private void Logout()
+    {
+        GitHubAuthService.ClearToken();
+        AvatarService.Clear();
+        AvatarImage = null;
+        OnPropertyChanged(nameof(IsLoggedIn));
+        OnPropertyChanged(nameof(LoginStatusText));
+        SetBusyState(false, "已退出登录");
+        AppendLog("已退出内置登录，后续将使用 gh CLI。");
+    }
+
+    /// <summary>刷新账号信息（可选同时更新头像）。</summary>
+    public void RefreshAccount(bool withAvatar = false)
+    {
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            var profile = GitHubService.GetUserProfile();
+            RunOnUi(() =>
+            {
+                if (profile is { Login.Length: > 0 } p)
+                {
+                    _settings.GitHubAccount = p.Login;
+                    OnPropertyChanged(nameof(AccountText));
+                    OnPropertyChanged(nameof(IsLoggedIn));
+                    OnPropertyChanged(nameof(LoginStatusText));
+                    if (withAvatar && !string.IsNullOrWhiteSpace(p.AvatarUrl))
+                        AvatarService.Ensure(p.Login, p.AvatarUrl);
+                    Save();
+                }
+                LoadAvatar();
+            });
+        });
+    }
+
+    /// <summary>从本地缓存加载头像为 ImageSource。</summary>
+    private void LoadAvatar()
+    {
+        RunOnUi(() =>
+        {
+            try
+            {
+                var path = AvatarService.GetCachedPath();
+                if (path == null || !System.IO.File.Exists(path)) { AvatarImage = null; return; }
+
+                var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                bmp.UriSource = new Uri(path);
+                bmp.EndInit();
+                bmp.Freeze();
+                AvatarImage = bmp;
+            }
+            catch { AvatarImage = null; }
+        });
     }
 
     private void PickBackupRoot()
@@ -362,17 +507,15 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
                 _envChecked = true;
                 OnPropertyChanged(nameof(EnvOk));
                 OnPropertyChanged(nameof(EnvStatusText));
-                AppendLog(EnvOk
-                    ? "环境检查：git 与 gh CLI 均可用。"
-                    : $"环境检查：{EnvStatusText}");
+                AppendLog($"环境检查：{EnvStatusText}");
             });
         });
     }
 
-    /// <summary>状态栏环境按钮：正常则重新检测，缺失则打开官方下载页。</summary>
+    /// <summary>状态栏环境按钮：全部就绪则重新检测；缺 git（必需）或想装 gh（可选）时打开对应下载页。</summary>
     private void EnvAction()
     {
-        if (EnvOk || !_envChecked) { CheckEnvironment(); return; }
+        if (!_envChecked || (EnvOk && _ghInstalled)) { CheckEnvironment(); return; }
 
         var url = !_gitInstalled ? "https://git-scm.com/download/win" : "https://cli.github.com/";
         try
@@ -391,6 +534,25 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
             return r.Succeeded;
         }
         catch { return false; }
+    }
+
+    /// <summary>新增一条「进行中」任务记录（供各页面报告操作进度）。</summary>
+    public TaskRecord AddTask(string title)
+    {
+        var t = new TaskRecord { Title = title };
+        RunOnUi(() =>
+        {
+            Tasks.Insert(0, t);
+            while (Tasks.Count > 100) Tasks.RemoveAt(Tasks.Count - 1);
+        });
+        return t;
+    }
+
+    /// <summary>结束任务记录。</summary>
+    public void CompleteTask(TaskRecord? task, bool ok, string? status = null)
+    {
+        if (task == null) return;
+        RunOnUi(() => task.Status = status ?? (ok ? "√ 成功" : "✗ 失败"));
     }
 
     /// <summary>供各页面设置全局忙碌状态（驱动底部状态栏的进度条 + 状态文字）。</summary>
@@ -424,6 +586,7 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         if (confirm != System.Windows.MessageBoxResult.Yes) return;
 
         RunOnUi(() => { IsBusy = true; StatusText = "正在删除仓库..."; });
+        var task = AddTask($"删除集中仓库 {repoName}");
         System.Threading.Tasks.Task.Run(() =>
         {
             string? error = null;
@@ -452,7 +615,8 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
                 Save();
                 IsBusy = false;
                 StatusText = "就绪";
-                AppendLog($"√ 已删除集中仓库：{repoName}" + (string.IsNullOrEmpty(error) ? "" : $"（{error}）"));
+                CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? "已删除" : "已删除（部分失败）");
+                if (!string.IsNullOrEmpty(error)) AppendLog($"删除集中仓库 {repoName} 出现问题：{error}");
             });
         });
     }
@@ -469,6 +633,7 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         if (confirm != System.Windows.MessageBoxResult.Yes) return;
 
         RunOnUi(() => { IsBusy = true; StatusText = "正在删除仓库..."; });
+        var task = AddTask($"删除独立仓库 {repoFull}");
         System.Threading.Tasks.Task.Run(() =>
         {
             string? error = null;
@@ -486,7 +651,8 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
                 Save();
                 IsBusy = false;
                 StatusText = "就绪";
-                AppendLog($"√ 已删除独立仓库：{repoFull}" + (string.IsNullOrEmpty(error) ? "" : $"（{error}）"));
+                CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? "已删除" : "已删除（部分失败）");
+                if (!string.IsNullOrEmpty(error)) AppendLog($"删除独立仓库 {repoFull} 出现问题：{error}");
             });
         });
     }
@@ -521,16 +687,26 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private void ExecuteJobs(IEnumerable<BackupJob> jobs)
     {
+        var list = jobs as BackupJob[] ?? jobs.ToArray();
+        var task = AddTask($"备份 {list.Length} 个项目");
+
         // 需在 UI 线程切换 IsBusy，因为绑定要求
         RunOnUi(() => { IsBusy = true; StatusText = "正在备份..."; });
         try
         {
-            foreach (var job in jobs)
+            var okCount = 0;
+            foreach (var job in list)
             {
                 // 「状态 / 最近备份」由 BackupJob 自身通知（已切回 UI 线程），无需整表刷新
-                _backup.RunJob(job, _settings);
+                if (_backup.RunJob(job, _settings)) okCount++;
             }
             Save();
+            CompleteTask(task, okCount == list.Length, $"{okCount}/{list.Length} 成功");
+        }
+        catch (Exception ex)
+        {
+            CompleteTask(task, false, "备份异常");
+            AppendLog("备份异常：" + ex.Message);
         }
         finally
         {

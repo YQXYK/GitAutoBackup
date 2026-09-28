@@ -22,6 +22,8 @@ public class ReposViewModel : INotifyPropertyChanged
         set => _main.AccountText = value;
     }
     public ICommand DetectAccountCommand => _main.DetectAccountCommand;
+
+    /// <summary>解锁删除权限（转发全局命令：内置登录时重新授权，否则走内置终端 gh）。</summary>
     public ICommand UnlockDeleteCommand => _main.UnlockDeleteCommand;
 
     private bool _hasDeleteScope;
@@ -87,6 +89,7 @@ public class ReposViewModel : INotifyPropertyChanged
         if (_isLoading) return;
         IsLoading = true;
         Message = "正在获取仓库列表...";
+        var task = _main.AddTask("获取仓库列表");
         _main.SetBusyState(true, "正在获取 GitHub 仓库列表 ...");
 
         System.Threading.Tasks.Task.Run(() =>
@@ -100,9 +103,10 @@ public class ReposViewModel : INotifyPropertyChanged
                 Message = !string.IsNullOrEmpty(error)
                     ? "获取失败：" + error
                     : list.Count == 0
-                        ? "没有找到仓库（请确认已登录 gh：gh auth login）。"
+                        ? "没有找到仓库（可在左下角账号入口登录，或执行 gh auth login）。"
                         : $"共 {list.Count} 个仓库（按最近更新排序）。";
                 _main.SetBusyState(false, string.IsNullOrEmpty(error) ? $"已加载 {list.Count} 个仓库" : "✗ 获取仓库列表失败");
+                _main.CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? $"已加载 {list.Count} 个仓库" : "获取失败");
             });
         });
     }
@@ -122,6 +126,7 @@ public class ReposViewModel : INotifyPropertyChanged
         var description = dlg.Description;
 
         Message = $"正在更新 {repo.FullName} ...";
+        var task = _main.AddTask($"更新仓库 {repo.FullName}");
         _main.SetBusyState(true, $"正在更新仓库 {repo.FullName} ...");
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -138,11 +143,13 @@ public class ReposViewModel : INotifyPropertyChanged
                     repo.Description = description;
                     Message = $"已更新仓库：{repo.FullName}";
                     _main.SetBusyState(false, $"√ 已更新仓库 {repo.FullName}");
+                    _main.CompleteTask(task, true, "已更新");
                 }
                 else
                 {
                     Message = $"更新失败：{error}";
                     _main.SetBusyState(false, "✗ 更新仓库失败");
+                    _main.CompleteTask(task, false, "更新失败");
                 }
             });
         });
@@ -161,6 +168,7 @@ public class ReposViewModel : INotifyPropertyChanged
         if (confirm != System.Windows.MessageBoxResult.Yes) return;
 
         Message = $"正在删除 {repo.FullName} ...";
+        var task = _main.AddTask($"删除仓库 {repo.FullName}");
         _main.SetBusyState(true, $"正在删除仓库 {repo.FullName} ...");
         System.Threading.Tasks.Task.Run(() =>
         {
@@ -175,11 +183,13 @@ public class ReposViewModel : INotifyPropertyChanged
                     Repos.Remove(repo);
                     Message = $"已删除仓库：{repo.FullName}";
                     _main.SetBusyState(false, $"√ 已删除仓库 {repo.FullName}");
+                    _main.CompleteTask(task, true, "已删除");
                 }
                 else
                 {
                     Message = $"删除失败：{error}";
                     _main.SetBusyState(false, "✗ 删除仓库失败");
+                    _main.CompleteTask(task, false, "删除失败");
                 }
             });
         });
