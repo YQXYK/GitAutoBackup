@@ -1,0 +1,30 @@
+<Window x:Class="GitAutoBackup.Views.EditRepoDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="编辑仓库" Width="470" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="{StaticResource AppBg}">
+    <StackPanel Margin="20">
+        <TextBlock Text="仓库" FontWeight="Bold" Margin="0,0,0,6"/>
+        <TextBlock x:Name="RepoNameText" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" Margin="0,0,0,16"/>
+
+        <TextBlock Text="可见性" FontWeight="Bold" Margin="0,0,0,6"/>
+        <ComboBox x:Name="VisibilityBox" Width="140" HorizontalAlignment="Left" Margin="0,0,0,16">
+            <ComboBox.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Value}" VerticalAlignment="Center"/>
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="描述" FontWeight="Bold" Margin="0,0,0,6"/>
+        <TextBox x:Name="DescriptionBox" Height="90" AcceptsReturn="True" TextWrapping="Wrap"
+                 VerticalScrollBarVisibility="Auto"/>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+            <Button Content="取消" Style="{StaticResource GhostButton}" Click="Cancel_Click" Padding="16,6" Margin="0,0,8,0" IsCancel="True"/>
+            <Button Content="保存" Style="{StaticResource AccentButton}" Click="Save_Click" Padding="16,6" IsDefault="True"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

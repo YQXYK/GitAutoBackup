@@ -1,0 +1,103 @@
+<UserControl x:Class="GitAutoBackup.Views.ConsolidatedView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="4">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 集中式设置 -->
+        <Border Grid.Row="0" Padding="14" CornerRadius="12" Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="集中式设置" FontWeight="Bold" Margin="0,0,0,8"/>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="备份根目录:" VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding BackupRoot, UpdateSourceTrigger=PropertyChanged}" Width="230" Margin="6,0"/>
+                    <Button Content="浏览..." Style="{StaticResource GhostButton}" Command="{Binding PickBackupRootCommand}" Margin="4,0" Padding="10,3"/>
+                    <TextBlock Text="（留空则存到 文档\GitAutoBackups\，每个仓库占一个子目录）"
+                               Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 新增集中仓库 -->
+        <Border Grid.Row="1" Padding="14" CornerRadius="12" Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="新增集中仓库" FontWeight="Bold" Margin="0,0,0,8"/>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="仓库名:" VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding NewRepoName, UpdateSourceTrigger=PropertyChanged}" Width="200" Margin="6,0"
+                             ToolTip="集中仓库的名字，例如 WorkBackup"/>
+                    <TextBlock Text="可见性:" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                    <ComboBox ItemsSource="{Binding VisibilityOptions}" SelectedValuePath="Key" SelectedValue="{Binding NewRepoIsPrivate}"
+                              Width="90" Margin="6,0">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Value}" VerticalAlignment="Center"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Content="新增仓库" Command="{Binding AddRepoCommand}" Style="{StaticResource AccentButton}" Padding="16,6" Margin="8,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 集中仓库列表 -->
+        <Border Grid.Row="2" Padding="14" CornerRadius="12" Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="现有集中仓库" FontWeight="Bold" Margin="0,0,0,8"/>
+                <ItemsControl ItemsSource="{Binding Repos}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="{StaticResource BorderLight}" BorderThickness="0,0,0,1" Padding="2,5">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding}" VerticalAlignment="Center" FontFamily="Consolas" Margin="0,0,12,0"/>
+                                    <Button Content="删除仓库" Style="{StaticResource GhostButton}" Padding="8,2"
+                                            Command="{Binding DataContext.DeleteRepoCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </Border>
+
+        <!-- 添加项目到仓库 -->
+        <Border Grid.Row="3" Padding="14" CornerRadius="12" Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="添加项目到仓库" FontWeight="Bold" Margin="0,0,0,8"/>
+                <TextBlock Text="{Binding Message}" TextWrapping="Wrap" LineHeight="20"
+                           Foreground="{StaticResource TextSecondary}" Margin="0,0,0,10"/>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="选择仓库:" VerticalAlignment="Center"/>
+                    <ComboBox ItemsSource="{Binding Repos}" SelectedItem="{Binding SelectedRepo}" Width="220" Margin="6,0"/>
+                    <Button Content="选择文件夹并加入" Command="{Binding AddProjectCommand}"
+                            Style="{StaticResource AccentButton}" Padding="16,6" Margin="8,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 现有集中式项目列表 -->
+        <GroupBox Grid.Row="4" Header="现有集中式项目" Padding="6">
+            <DataGrid ItemsSource="{Binding Jobs}" AutoGenerateColumns="False" IsReadOnly="True"
+                      CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="项目名" Binding="{Binding ProjectName}" IsReadOnly="True" Width="150"/>
+                    <DataGridTextColumn Header="所属仓库" Binding="{Binding ConsolidatedRepoName}" IsReadOnly="True" Width="140"/>
+                    <DataGridTextColumn Header="源路径" Binding="{Binding SourcePath}" IsReadOnly="True" Width="*"/>
+                    <DataGridTextColumn Header="状态" Binding="{Binding LastStatus}" IsReadOnly="True" Width="110"/>
+                    <DataGridTextColumn Header="最近备份" Binding="{Binding LastBackupAt, StringFormat={}{0:MM-dd HH:mm}}" IsReadOnly="True" Width="110"/>
+                </DataGrid.Columns>
+            </DataGrid>
+        </GroupBox>
+    </Grid>
+</UserControl>

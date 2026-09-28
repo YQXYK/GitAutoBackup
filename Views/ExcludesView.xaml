@@ -1,0 +1,96 @@
+<UserControl x:Class="GitAutoBackup.Views.ExcludesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:GitAutoBackup.ViewModels">
+    <Grid Margin="4">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 模式切换 + 新增 -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Text="自定义排除规则" FontWeight="Bold" FontSize="15" Margin="0,0,0,8"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                <RadioButton Content="全局规则（作用所有项目）" IsChecked="{Binding IsGlobal}" GroupName="Scope" Margin="0,0,16,0" VerticalAlignment="Center"/>
+                <RadioButton Content="按项目配置" IsChecked="{Binding IsProject}" GroupName="Scope" VerticalAlignment="Center"/>
+            </StackPanel>
+            <TextBlock Text="新增排除项（按名称精确匹配）" FontWeight="600" Margin="0,0,0,4"/>
+            <StackPanel Orientation="Horizontal">
+                <TextBox Text="{Binding NewItemName, UpdateSourceTrigger=PropertyChanged}" Width="240" Margin="0,0,8,0" ToolTip="要排除的名称，如 server 或 test.vue"/>
+                <ComboBox ItemsSource="{Binding TypeOptions}" SelectedValue="{Binding NewItemType}"
+                      SelectedValuePath="Key" Width="100" Margin="0,0,8,0">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Value}" VerticalAlignment="Center"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Content="＋ 添加到全局规则" Command="{Binding AddGlobalCommand}" Padding="10,4"
+                        Visibility="{Binding IsGlobal, Converter={StaticResource BoolToVis}}"/>
+                <Button Content="＋ 添加到选中项目" Command="{Binding AddProjectCommand}" Padding="10,4"
+                        Visibility="{Binding IsProject, Converter={StaticResource BoolToVis}}"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- 全局规则列表 -->
+        <GroupBox Grid.Row="1" Header="全局规则" Padding="8" Margin="0,10,0,8"
+                  Visibility="{Binding IsGlobal, Converter={StaticResource BoolToVis}}">
+            <StackPanel>
+                <TextBlock Text="内置规则（永久生效，不可删除）：" FontWeight="600" Margin="0,0,0,4"/>
+                <TextBlock Text="{Binding BuiltinItemsText}" Foreground="{StaticResource TextSecondary}" FontSize="12" Margin="0,0,0,8"/>
+                <TextBlock Text="自定义全局规则（作用所有项目）：" FontWeight="600" Margin="0,0,0,4"/>
+                <ItemsControl ItemsSource="{Binding GlobalItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="{StaticResource BorderLight}" BorderThickness="0,0,0,1" Padding="2,5">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Type, Converter={StaticResource TypeToText}}" Width="70" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding Name}" FontFamily="Consolas" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextPrimary}" Margin="0,0,12,0"/>
+                                    <Button Content="删除" Style="{StaticResource GhostButton}" Command="{Binding DataContext.RemoveGlobalCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding Rule}" Padding="8,2"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- 按项目规则 -->
+        <GroupBox Grid.Row="1" Header="按项目规则" Padding="8" Margin="0,10,0,8"
+                  Visibility="{Binding IsProject, Converter={StaticResource BoolToVis}}">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock Text="选择项目:" VerticalAlignment="Center"/>
+                    <ComboBox ItemsSource="{Binding JobOptions}"
+                              SelectedItem="{Binding SelectedJob}" Width="240" Margin="6,0,0,0">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding ProjectName}" VerticalAlignment="Center"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
+                <TextBlock Text="{Binding ProjectHint}" Foreground="{StaticResource TextSecondary}" FontSize="12" Margin="0,0,0,6"/>
+                <ItemsControl ItemsSource="{Binding ProjectItems}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="{StaticResource BorderLight}" BorderThickness="0,0,0,1" Padding="2,5">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Type, Converter={StaticResource TypeToText}}" Width="70" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding Name}" FontFamily="Consolas" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextPrimary}" Margin="0,0,12,0"/>
+                                    <Button Content="删除" Style="{StaticResource GhostButton}" Command="{Binding DataContext.RemoveProjectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding Rule}" Padding="8,2"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </GroupBox>
+    </Grid>
+</UserControl>

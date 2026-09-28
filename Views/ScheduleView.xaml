@@ -1,0 +1,22 @@
+<UserControl x:Class="GitAutoBackup.Views.ScheduleView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Margin="4" MaxWidth="480" HorizontalAlignment="Left">
+        <TextBlock Text="定时自动备份" FontWeight="Bold" FontSize="15" Margin="0,0,0,12"/>
+
+        <Border Padding="16" CornerRadius="12" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource BorderLight}" BorderThickness="1">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal">
+                    <CheckBox Content="启用定时自动备份" IsChecked="{Binding SchedulerEnabled}" VerticalAlignment="Center"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="24,18,0,0">
+                    <TextBlock Text="每" VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding IntervalValue, UpdateSourceTrigger=PropertyChanged}" Width="70" Margin="6,0" VerticalAlignment="Center"/>
+                    <ComboBox ItemsSource="{Binding IntervalUnits}" SelectedItem="{Binding IntervalUnit}"
+                              Width="80" Margin="0,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock Text="到时间后将自动备份所有勾选任务（需保持本应用运行）。" Foreground="{StaticResource TextSecondary}" FontSize="12" Margin="24,14,0,0"/>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

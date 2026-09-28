@@ -1,0 +1,89 @@
+<UserControl x:Class="GitAutoBackup.Views.ReposView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="4">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- GitHub 账号 -->
+        <Border Grid.Row="0" Padding="14" CornerRadius="12" Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="GitHub 账号" FontWeight="Bold" Margin="0,0,0,8"/>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="GitHub:" FontWeight="Bold" VerticalAlignment="Center"/>
+                    <TextBox Text="{Binding AccountText, UpdateSourceTrigger=PropertyChanged}"
+                             Width="170" Margin="6,0,6,0" VerticalAlignment="Center"
+                             ToolTip="可手动输入，或点右侧按钮自动检测"/>
+                    <Button Content="自动检测" Style="{StaticResource GhostButton}" Command="{Binding DetectAccountCommand}" Margin="2,0,0,0" Padding="10,3"/>
+                    <TextBlock Text="（留空则尝试自动检测）" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                    <Button Content="解锁删除权限" Style="{StaticResource GhostButton}" Command="{Binding UnlockDeleteCommand}" Margin="12,0,0,0" Padding="10,3"
+                            ToolTip="删除仓库前需先授权 delete_repo 权限（会在内置终端里执行）"/>
+                    <Button Content="刷新" Style="{StaticResource GhostButton}" Command="{Binding RefreshDeleteScopeCommand}" Margin="8,0,0,0" Padding="10,3"
+                            ToolTip="重新检测删除权限状态"/>
+                    <TextBlock Text="{Binding DeleteScopeStatusText}" VerticalAlignment="Center" Margin="8,0,0,0">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasDeleteScope}" Value="True">
+                                        <Setter Property="Foreground" Value="#1D9E75"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 仓库操作 -->
+        <Border Grid.Row="1" Padding="14" CornerRadius="12" Background="{StaticResource PanelBg}"
+                BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="我的 GitHub 仓库" FontWeight="Bold" Margin="0,0,0,8"/>
+                <TextBlock Text="{Binding Message}" TextWrapping="Wrap" LineHeight="20"
+                           Foreground="{StaticResource TextSecondary}" Margin="0,0,0,10"/>
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="刷新" Command="{Binding RefreshCommand}" Style="{StaticResource AccentButton}" Padding="16,6"/>
+                    <ProgressBar Width="120" Height="4" IsIndeterminate="True"
+                                 Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}"
+                                 VerticalAlignment="Center" Margin="12,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 仓库列表 -->
+        <GroupBox Grid.Row="2" Header="仓库列表" Padding="6">
+            <DataGrid ItemsSource="{Binding Repos}" AutoGenerateColumns="False" IsReadOnly="True"
+                      CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="仓库" Binding="{Binding FullName}" IsReadOnly="True" Width="*"/>
+                    <DataGridTextColumn Header="可见性" Binding="{Binding VisibilityText}" IsReadOnly="True" Width="80"/>
+                    <DataGridTextColumn Header="语言" Binding="{Binding LanguageText}" IsReadOnly="True" Width="100"/>
+                    <DataGridTextColumn Header="大小" Binding="{Binding SizeText}" IsReadOnly="True" Width="90"/>
+                    <DataGridTextColumn Header="最近更新" Binding="{Binding UpdatedAt, StringFormat={}{0:yyyy-MM-dd HH:mm}}" IsReadOnly="True" Width="140"/>
+                    <DataGridTextColumn Header="描述" Binding="{Binding Description}" IsReadOnly="True" Width="220"/>
+                    <DataGridTemplateColumn Header="操作" Width="140">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="编辑" Style="{StaticResource GhostButton}" Padding="8,2" Margin="0,0,6,0"
+                                            ToolTip="修改仓库的可见性与描述"
+                                            Command="{Binding DataContext.EditCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}"/>
+                                    <Button Content="删除" Style="{StaticResource GhostButton}" Padding="8,2"
+                                            Command="{Binding DataContext.DeleteCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+        </GroupBox>
+    </Grid>
+</UserControl>
