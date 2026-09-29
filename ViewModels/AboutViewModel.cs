@@ -1,5 +1,7 @@
 namespace GitAutoBackup.ViewModels;
 
+using GitAutoBackup.Services;
+
 /// <summary>「关于」页：静态信息。</summary>
 public class AboutViewModel
 {
@@ -11,6 +13,27 @@ public class AboutViewModel
         "支持自定义排除规则（全局 / 每项目）；\n" +
         "支持定时自动备份与失败重试。";
     public string Tech => "C# / WPF / .NET 10，内置调用 git 与 gh CLI。";
+
+    /// <summary>数据目录（配置、凭据、头像、日志都在这下面）。</summary>
+    public string DataDir => PathService.DataDir;
+
+    /// <summary>数据目录补充说明：日志子目录 + 当前占用。</summary>
+    public string DataDirHint
+    {
+        get
+        {
+            var size = FormatSize(LogService.GetTotalSize());
+            return $"日志子目录：{LogService.LogDir}\n" +
+                   $"日志当前占用：{size}（保留最近 30 天，单文件超过 5 MB 自动分片）";
+        }
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => bytes + " B",
+        < 1024 * 1024 => (bytes / 1024.0).ToString("0.0") + " KB",
+        _ => (bytes / 1024.0 / 1024.0).ToString("0.00") + " MB"
+    };
 
     /// <summary>制作者 GitHub 主页</summary>
     public string AuthorUrl => "https://github.com/YQXYK";

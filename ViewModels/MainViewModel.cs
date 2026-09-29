@@ -126,6 +126,8 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
     public RelayCommand LoginCommand { get; }
     public RelayCommand LogoutCommand { get; }
     public RelayCommand RefreshAccountCommand { get; }
+    public RelayCommand OpenLogFolderCommand { get; }
+    public RelayCommand ClearLogCommand { get; }
 
     /// <summary>是否已内置登录（OAuth token）。</summary>
     public bool IsLoggedIn => GitHubAuthService.HasToken;
@@ -236,6 +238,12 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         ShowLogPanelCommand = new RelayCommand(_ => BottomTab = BottomPanelTab.Log);
         ShowTerminalPanelCommand = new RelayCommand(_ => BottomTab = BottomPanelTab.Terminal);
         ShowTaskPanelCommand = new RelayCommand(_ => BottomTab = BottomPanelTab.Tasks);
+        OpenLogFolderCommand = new RelayCommand(_ => OpenLogFolder());
+        ClearLogCommand = new RelayCommand(_ => ClearLog());
+
+        // 启动时清理过期日志
+        LogService.CleanupOldLogs();
+        AppendLog("===== GitAutoBackup 启动 =====");
 
         UpdateTimer();
         LoadAccount();
@@ -743,6 +751,9 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
 
     private void AppendLog(string msg)
     {
+        // 先落盘（含级别判定），再更新界面内存缓冲
+        LogService.Write(msg, GuessLevel(msg));
+
         RunOnUi(() =>
         {
             LogText += msg + Environment.NewLine;
@@ -750,6 +761,49 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
             if (LogText.Length > 200000) LogText = LogText[^100000..];
             OnPropertyChanged(nameof(LogText));
         });
+    }
+
+    /// <summary>按关键词粗略判定日志级别，仅用于文件里的标签，不影响界面显示。</summary>
+    private static LogLevel GuessLevel(string msg)
+    {
+        if (msg.Contains("失败") || msg.Contains("错误") || msg.Contains("异常") || msg.Contains("✗"))
+            return LogLevel.Error;
+        if (msg.Contains("警告") || msg.Contains("未检测到") || msg.Contains("重试") || msg.Contains("无法"))
+            return LogLevel.Warn;
+        return LogLevel.Info;
+    }
+
+    /// <summary>在资源管理器里打开日志目录。</summary>
+    private void OpenLogFolder()
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(LogService.LogDir);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = LogService.LogDir,
+                UseShellExecute = true
+            });
+            SetBusyState(false, "已打开日志目录");
+        }
+        catch (Exception ex)
+        {
+            AppendLog("打开日志目录失败：" + ex.Message);
+            SetBusyState(false, "✗ 打开日志目录失败");
+        }
+    }
+
+    /// <summary>清空当前窗口与磁盘上的日志。</summary>
+    private void ClearLog()
+    {
+        LogService.ClearAll();
+        RunOnUi(() =>
+        {
+            LogText = string.Empty;
+            OnPropertyChanged(nameof(LogText));
+        });
+        AppendLog("日志已清空。");
+        SetBusyState(false, "日志已清空");
     }
 
     /// <summary>在 UI 线程弹出推送失败对话框，询问是否重试（阻塞等待用户选择）。返回 true=重试。</summary>

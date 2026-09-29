@@ -5,6 +5,7 @@
         xmlns:views="clr-namespace:GitAutoBackup.Views"
         xmlns:term="clr-namespace:EasyWindowsTerminalControl;assembly=EasyWindowsTerminalControl"
         Title="GitAutoBackup - 图形化 Git 备份工具"
+        Icon="Assets/app.ico"
         Height="820" Width="1040"
         MinHeight="640" MinWidth="900"
         WindowStartupLocation="CenterScreen">
@@ -236,7 +237,7 @@
                 <DockPanel>
                     <!-- 标题栏：标签切换 + 收起图标 -->
                     <Border DockPanel.Dock="Top" Background="{StaticResource SidebarBg}" Padding="6,2">
-                        <DockPanel>
+                        <DockPanel LastChildFill="False">
                             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                                 <Button Content="日志" Command="{Binding ShowLogPanelCommand}" Background="Transparent" BorderThickness="0" Padding="10,4" Cursor="Hand">
                                     <Button.Style>
@@ -284,12 +285,24 @@
                                     </Button.Style>
                                 </Button>
                             </StackPanel>
-                            <Button DockPanel.Dock="Right" ToolTip="最小化" Command="{Binding ToggleLogCommand}"
-                                    Background="Transparent" BorderThickness="0" Padding="6" Cursor="Hand"
-                                    HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <Path Data="M0,0 L6,5 L12,0" Stroke="{StaticResource TextSecondary}" StrokeThickness="1.6"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
-                            </Button>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="打开目录" ToolTip="在资源管理器中打开日志目录"
+                                        Command="{Binding OpenLogFolderCommand}"
+                                        Background="Transparent" BorderThickness="0" Padding="8,4" Cursor="Hand"
+                                        FontSize="12" Foreground="{StaticResource TextSecondary}"
+                                        Visibility="{Binding IsLogPanel, Converter={StaticResource BoolToVis}}"/>
+                                <Button Content="清空" ToolTip="清空当前窗口与磁盘上的日志"
+                                        Command="{Binding ClearLogCommand}"
+                                        Background="Transparent" BorderThickness="0" Padding="8,4" Cursor="Hand"
+                                        FontSize="12" Foreground="{StaticResource TextSecondary}"
+                                        Visibility="{Binding IsLogPanel, Converter={StaticResource BoolToVis}}"/>
+                                <Button ToolTip="最小化" Command="{Binding ToggleLogCommand}"
+                                        Background="Transparent" BorderThickness="0" Padding="6" Cursor="Hand"
+                                        VerticalAlignment="Center">
+                                    <Path Data="M0,0 L6,5 L12,0" Stroke="{StaticResource TextSecondary}" StrokeThickness="1.6"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                </Button>
+                            </StackPanel>
                         </DockPanel>
                     </Border>
                     <!-- 内容：日志 或 终端 -->

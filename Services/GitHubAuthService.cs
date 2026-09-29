@@ -32,10 +32,7 @@ public static class GitHubAuthService
     /// <summary>获取删除仓库权限时追加的范围。</summary>
     public const string DeleteScope = "repo read:org delete_repo";
 
-    private static readonly string TokenDir =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitAutoBackup");
-
-    private static readonly string TokenFile = Path.Combine(TokenDir, "token.dat");
+    private static readonly string TokenFile = Path.Combine(PathService.DataDir, "token.dat");
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
@@ -57,7 +54,7 @@ public static class GitHubAuthService
 
     public static void SaveToken(string token)
     {
-        Directory.CreateDirectory(TokenDir);
+        PathService.EnsureDataDir();
         var encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(token), null, DataProtectionScope.CurrentUser);
         File.WriteAllBytes(TokenFile, encrypted);
     }

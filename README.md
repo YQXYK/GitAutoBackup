@@ -15,6 +15,7 @@
 - **GitHub 仓库管理**：查看账号下所有仓库、修改可见性（公开/私有）与描述、删除仓库
 - **自动生成仓库说明**：备份仓库的 `README.md` 自动生成并更新（含仓库类型与项目列表）
 - **日志 / 终端 / 任务三个面板**：底部可切换，操作进度与程序内部细节分开呈现
+- **日志自动落盘**：程序日志按天写入本地文件（保留 30 天、超出自动分片），出问题可回溯
 - **内置终端**：直接在内置终端里执行 `git` / `gh` 命令
 - **环境自检**：启动时检测 `git` / `gh`，缺失时给出官方下载入口
 
@@ -72,12 +73,26 @@ Services/     核心服务
   AvatarService     账号头像下载与缓存
   BackupService     备份流程编排（集中式 / 独立式）
   SettingsService   配置持久化
+  LogService        日志落盘（按天滚动、限长分片、过期清理）
+  PathService       统一的用户数据目录
 Behaviors/    附加行为（如表格滚轮事件转发）
 ViewModels/   MVVM 视图模型
 Views/        WPF 界面
+Assets/       应用图标（app.ico 多尺寸 / app-512.png 大图，供仓库配图）
+tools/        构建脚本（make_icon.py 由源图生成多尺寸图标）
 ```
 
-配置与错误日志位于 `%AppData%\GitAutoBackup\`（`settings.json` / `errors.log`），登录令牌经 DPAPI 加密后存于同目录。
+### 数据目录
+
+所有用户数据都在 `%AppData%\GitAutoBackup\`，删除该目录即可完全清理（无注册表残留）：
+
+| 文件 | 内容 |
+|---|---|
+| `settings.json` | 配置：仓库名、备份任务、排除规则、定时设置 |
+| `token.dat` | GitHub 登录令牌，经 **DPAPI 加密**（仅当前 Windows 用户可解，拷到别的电脑无效） |
+| `avatar.png` / `avatar.login` | 头像缓存及其归属账号 |
+| `logs\yyyy-MM-dd.log` | **程序日志**：按天一个文件，保留最近 30 天，单文件超过 5 MB 自动分片 |
+| `errors.log` | 崩溃异常摘要（与 `logs` 内容对应，便于快速定位） |
 
 ## 技术栈
 

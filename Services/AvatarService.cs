@@ -9,11 +9,8 @@ namespace GitAutoBackup.Services;
 /// </summary>
 public static class AvatarService
 {
-    private static readonly string Dir =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitAutoBackup");
-
-    private static readonly string ImagePath = Path.Combine(Dir, "avatar.png");
-    private static readonly string LoginPath = Path.Combine(Dir, "avatar.login");
+    private static readonly string ImagePath = Path.Combine(PathService.DataDir, "avatar.png");
+    private static readonly string LoginPath = Path.Combine(PathService.DataDir, "avatar.login");
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
@@ -27,7 +24,7 @@ public static class AvatarService
     {
         try
         {
-            Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(PathService.DataDir);
 
             var cachedLogin = File.Exists(LoginPath) ? File.ReadAllText(LoginPath).Trim() : string.Empty;
             var sameAccount = string.Equals(cachedLogin, login, StringComparison.OrdinalIgnoreCase);

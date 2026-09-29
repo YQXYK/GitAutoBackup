@@ -23,6 +23,19 @@
 
         <Border Padding="18" CornerRadius="12" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,14">
             <StackPanel>
+                <TextBlock Text="数据与日志位置" FontWeight="Bold" Margin="0,0,0,8"/>
+                <TextBlock TextWrapping="Wrap" LineHeight="22" Foreground="{StaticResource TextSecondary}"
+                           Text="配置、登录凭据、头像与日志都保存在当前用户目录下，卸载时删除该目录即可完全清理："/>
+                <TextBox Text="{Binding DataDir, Mode=OneWay}" IsReadOnly="True" BorderThickness="0"
+                         Background="Transparent" Foreground="{StaticResource TextPrimary}"
+                         FontFamily="Consolas" FontSize="12" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding DataDirHint}" TextWrapping="Wrap" FontSize="12"
+                           Foreground="{StaticResource TextFaint}" Margin="0,6,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <Border Padding="18" CornerRadius="12" Background="{StaticResource PanelBg}" BorderBrush="{StaticResource BorderLight}" BorderThickness="1" Margin="0,0,0,14">
+            <StackPanel>
                 <TextBlock Text="声明" FontWeight="Bold" Margin="0,0,0,8"/>
                 <TextBlock Text="{Binding Declaration}" TextWrapping="Wrap" LineHeight="22" Foreground="{StaticResource TextSecondary}"/>
             </StackPanel>

@@ -7,8 +7,7 @@ namespace GitAutoBackup.Services;
 /// <summary>配置持久化：读写 %AppData%\GitAutoBackup\settings.json</summary>
 public static class SettingsService
 {
-    private static string DirPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitAutoBackup");
+    private static string DirPath => PathService.DataDir;
 
     private static string FilePath => Path.Combine(DirPath, "settings.json");
 

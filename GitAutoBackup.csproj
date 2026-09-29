@@ -13,6 +13,9 @@
     <Description>图形化 Git 备份工具：把项目文件夹自动备份到 GitHub 仓库</Description>
     <Authors>YQXYK</Authors>
 
+    <!-- 应用图标：exe 文件图标 / 资源管理器 / 任务栏都取这里 -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+
     <!-- 单文件发布必须把 native 库一起嵌入，否则 exe 离开 publish 目录就会静默崩溃：
          WPF 的 wpfgfx_cor3 / PresentationNative_cor3 / vcruntime140_cor3 / D3DCompiler_47_cor3 / PenImc_cor3，
          以及内置终端控件的 conpty.dll / Microsoft.Terminal.Control.dll。 -->
@@ -25,6 +28,11 @@
 
   <ItemGroup>
     <PackageReference Include="EasyWindowsTerminalControl" Version="1.0.38" />
+  </ItemGroup>
+
+  <!-- 图标作为 WPF 资源嵌入，供 Window.Icon 在运行时加载 -->
+  <ItemGroup>
+    <Resource Include="Assets\app.ico" />
   </ItemGroup>
 
   <!-- 发布后清理 pdb：第三方包附带的 pdb 有数十 MB，无需随发布包分发 -->
