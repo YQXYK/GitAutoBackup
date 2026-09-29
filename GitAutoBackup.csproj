@@ -12,10 +12,27 @@
     <Product>GitAutoBackup</Product>
     <Description>图形化 Git 备份工具：把项目文件夹自动备份到 GitHub 仓库</Description>
     <Authors>YQXYK</Authors>
+
+    <!-- 单文件发布必须把 native 库一起嵌入，否则 exe 离开 publish 目录就会静默崩溃：
+         WPF 的 wpfgfx_cor3 / PresentationNative_cor3 / vcruntime140_cor3 / D3DCompiler_47_cor3 / PenImc_cor3，
+         以及内置终端控件的 conpty.dll / Microsoft.Terminal.Control.dll。 -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+
+    <!-- Release 不生成 pdb（第三方 pdb 有数十 MB，不该跟着发布） -->
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="EasyWindowsTerminalControl" Version="1.0.38" />
   </ItemGroup>
+
+  <!-- 发布后清理 pdb：第三方包附带的 pdb 有数十 MB，无需随发布包分发 -->
+  <Target Name="RemovePdbsAfterPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_PublishedPdbs Include="$(PublishDir)**\*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_PublishedPdbs)" ContinueOnError="true" />
+  </Target>
 
 </Project>
