@@ -15,13 +15,35 @@ public class BackupService
     public event Action<string>? StageChanged;
 
     /// <summary>
-    /// 推送失败时向界面请求决定：传入原始错误信息，返回 true=重试，false=取消。
-    /// 由界面层弹窗让用户选择；为 null 时自动重试有限次数。
+    /// 推送失败时把**翻译后的友好说明**交给界面弹窗（传入原始技术错误只会让用户看不懂）。
+    /// 返回 true=用户选择重试，false=放弃本次备份。
+    /// 注意：对「重试必然失败」的错误（文件过大、认证失效、仓库不存在等），
+    /// 本服务不会询问用户，而是直接调此回调做一次性告知后结束。
+    /// 为 null 时按错误是否可重试自动决定。
     /// </summary>
-    public Func<string, bool>? RetryPrompt;
+    public Func<FriendlyError, string, bool>? PushFailedPrompt;
+
+    /// <summary>
+    /// 发现超过 GitHub 单文件硬上限（100 MiB）的文件时向界面请求决定：
+    /// 返回 true=跳过这些文件继续备份，false=取消本次备份。
+    /// 为 null 时视为取消（安全优先：不确认就不冒险推送必然失败的包）。
+    /// </summary>
+    public Func<LargeFileRequest, bool>? LargeFilePrompt;
+
+    /// <summary>当前任务中因超限被跳过的文件绝对路径（每次 RunJob 前重置）。</summary>
+    private HashSet<string> _skippedFiles = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>推送失败时的自动重试次数（如无法弹窗或用户选择重试时的兜底）。</summary>
     public const int MaxPushRetries = 3;
+
+    /// <summary>推送的首次等待上限（毫秒）。超时会询问用户是否重试，重试时自动延长。</summary>
+    private const int PushTimeoutMs = 300_000;
+
+    /// <summary>推送重试时的等待上限（毫秒），10 分钟封顶。</summary>
+    private const int PushTimeoutMaxMs = 600_000;
+
+    /// <summary>自动合并远程变更（pull --rebase）的等待上限（毫秒）。</summary>
+    private const int PullRebaseTimeoutMs = 120_000;
 
     private void Emit(string msg) => Log?.Invoke($"[{DateTime.Now:HH:mm:ss}] {MaskToken(msg)}");
     private void Stage(string msg) => StageChanged?.Invoke(msg);
@@ -42,9 +64,110 @@ public class BackupService
             Emit($"✗ [{job.ProjectName}] {job.LastStatus}: {job.SourcePath}");
             return false;
         }
+
+        _skippedFiles.Clear();
+
+        // 备份前体积检查：GitHub 对单文件 100 MiB 硬拒绝、仓库总量有软/硬上限，
+        // 提前发现可避免"复制半天、提交完才在 push 阶段失败"。
+        if (!CheckSizes(job, settings)) return false;
+
         return job.Mode == BackupMode.Standalone
             ? RunStandalone(job, settings)
             : RunConsolidated(job, settings);
+    }
+
+    /// <summary>
+    /// 备份前体积检查。返回 false 表示应中止本次备份（用户取消）。
+    /// 用户选择"跳过超大文件"时，把路径记入 <see cref="_skippedFiles"/>，供复制/忽略环节排除。
+    /// </summary>
+    private bool CheckSizes(BackupJob job, Settings settings)
+    {
+        try
+        {
+            Stage("正在检查文件大小...");
+            Emit($"→ 正在统计 {job.ProjectName} 的体积...");
+
+            var scan = BackupSizeChecker.Scan(job.SourcePath, BuildNameExcluded(job, settings));
+
+            if (scan.SkippedEntries > 0)
+                Emit($"ℹ 统计时有 {scan.SkippedEntries} 个条目因权限等原因未能读取（已忽略）");
+
+            Emit($"ℹ {job.ProjectName}：{scan.TotalFiles} 个文件，共 {scan.TotalSizeText}");
+
+            // ---- 1. 单个文件超过 100 MiB：push 必然失败，必须处理 ----
+            if (scan.HasBlocking)
+            {
+                var request = new LargeFileRequest(job.ProjectName, scan);
+                var skip = LargeFilePrompt?.Invoke(request) ?? false;
+                if (!skip)
+                {
+                    job.LastStatus = $"已取消：存在 {scan.BlockingFiles.Count} 个超过 100MB 的文件";
+                    Emit($"✗ {job.LastStatus}（GitHub 会拒绝推送超 100MB 的文件）");
+                    return false;
+                }
+
+                foreach (var f in scan.BlockingFiles)
+                {
+                    var abs = Path.GetFullPath(Path.Combine(job.SourcePath, f.RelativePath.Replace('/', Path.DirectorySeparatorChar)));
+                    _skippedFiles.Add(abs);
+                }
+                var skippedBytes = scan.BlockingFiles.Sum(f => f.Size);
+                Emit($"⚠ 已跳过 {scan.BlockingFiles.Count} 个超大文件（共 {LargeFile.FormatSize(skippedBytes)}），它们不会进入备份仓库");
+            }
+
+            // ---- 2. 单个文件 50~100 MiB：能推上去但会显著撑大仓库，仅提示 ----
+            if (scan.HasWarning)
+            {
+                Emit($"⚠ 有 {scan.WarningFiles.Count} 个文件超过 50MB（未超过 100MB，可正常推送，但会让仓库明显膨胀）：");
+                foreach (var f in scan.WarningFiles.Take(10))
+                    Emit($"    · {f.RelativePath}（{f.SizeText}）");
+                if (scan.WarningFiles.Count > 10)
+                    Emit($"    · …另有 {scan.WarningFiles.Count - 10} 个");
+                Emit("  建议：把这类大文件加入排除规则，或改用 Git LFS。");
+            }
+
+            // ---- 3. 仓库总量：估算本次推送后的体积 ----
+            var repoBytes = EstimateRepoBytes(job, settings, scan.TotalBytes);
+            if (repoBytes >= BackupSizeChecker.BlockRepoBytes)
+            {
+                Emit($"⚠ 仓库预计体积约 {LargeFile.FormatSize(repoBytes)}，已接近或超过 GitHub 的 5GB 上限。" +
+                     "继续推送可能被官方要求整改，建议清理大文件或拆分仓库。");
+            }
+            else if (repoBytes >= BackupSizeChecker.WarnRepoBytes)
+            {
+                Emit($"⚠ 仓库预计体积约 {LargeFile.FormatSize(repoBytes)}，已超过 GitHub 建议的 1GB。" +
+                     "仓库越大，clone / push 越慢，建议关注。");
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // 检查本身失败不应阻断备份（例如权限问题），记录后继续
+            Emit($"ℹ 体积检查未能完成（{ex.Message}），继续执行备份。");
+            return true;
+        }
+    }
+
+    /// <summary>估算本次推送后仓库的大致体积。</summary>
+    private static long EstimateRepoBytes(BackupJob job, Settings settings, long sourceBytes)
+    {
+        if (job.Mode == BackupMode.Consolidated)
+        {
+            // 集中式：现有仓库目录（可能已含该项目旧版本）+ 本次内容，属保守高估
+            var repoName = SanitizeName(
+                string.IsNullOrWhiteSpace(job.ConsolidatedRepoName)
+                    ? settings.ConsolidatedRepoName
+                    : job.ConsolidatedRepoName);
+            var baseRoot = ResolveBackupRoot(settings);
+            if (string.IsNullOrWhiteSpace(repoName) || string.IsNullOrWhiteSpace(baseRoot)) return sourceBytes;
+            var repoDir = Path.Combine(baseRoot, repoName);
+            return BackupSizeChecker.MeasureDirectory(repoDir) + sourceBytes;
+        }
+
+        // 独立式：源项目内容 + 已有 .git 历史
+        var gitBytes = BackupSizeChecker.MeasureDirectory(Path.Combine(job.SourcePath, ".git"));
+        return sourceBytes + gitBytes;
     }
 
     // ---------- 方式A：集中式 ----------
@@ -95,7 +218,8 @@ public class BackupService
             if (Directory.Exists(dest)) Directory.Delete(dest, recursive: true);
             Stage($"正在复制 {job.ProjectName}...");
             Emit($"→ 复制 {job.ProjectName} 中...");
-            CopyDirectory(job.SourcePath, dest, BuildNameExcluded(job, settings));
+            CopyDirectory(job.SourcePath, dest, BuildNameExcluded(job, settings),
+                          filePathSkipped: _skippedFiles.Count > 0 ? (p => _skippedFiles.Contains(p)) : null);
             Emit($"√ 已复制（已排除 .git / node_modules / 自定义规则等）");
 
             Stage("正在提交到 Git...");
@@ -126,9 +250,10 @@ public class BackupService
             var branch = CurrentBranchOrMain(root);
             Stage($"正在推送到 GitHub（{repoFull}），网络可能需要几十秒，请稍候...");
             Emit($"→ 正在推送到 {repoFull}，网络可能需要几十秒，请稍候...");
-            if (!PushWithRetry(root, branch, repoFull))
+            if (!PushWithRetry(root, branch, repoFull, job.ProjectName, out var pushErr))
             {
-                job.LastStatus = $"推送失败（已重试/取消）：{repoFull}";
+                // 状态栏与任务面板用通俗结论，而不是让用户去读 git 原文
+                job.LastStatus = pushErr != null ? $"推送失败：{pushErr.Title}" : $"推送失败：{repoFull}";
                 Emit($"✗ {job.LastStatus}");
                 return false;
             }
@@ -161,6 +286,7 @@ public class BackupService
             if (!GitService.IsRepo(src)) GitService.Init(src);
             EnsureGitIdentity(src);
             AppendExcludesToGitIgnore(src, job, settings);
+            ApplySkippedFilesForStandalone(src);
 
             // 清理本地 .git 不必要不删除；但对大目录可走配置，此处直接 add（依赖 .gitignore 过滤 build 产物）
             var add = GitService.AddAll(src);
@@ -194,9 +320,9 @@ public class BackupService
             EnsureRemote(src, repoFull);
 
             var branch = CurrentBranchOrMain(src);
-            if (!PushWithRetry(src, branch, repoFull))
+            if (!PushWithRetry(src, branch, repoFull, job.ProjectName, out var pushErr2))
             {
-                job.LastStatus = $"推送失败（已重试/取消）：{repoFull}";
+                job.LastStatus = pushErr2 != null ? $"推送失败：{pushErr2.Title}" : $"推送失败：{repoFull}";
                 Emit($"✗ {job.LastStatus}");
                 return false;
             }
@@ -309,50 +435,92 @@ public class BackupService
     /// - 若为网络类错误：通过 RetryPrompt 弹窗询问用户「重试/取消」。
     /// 返回 true 表示最终推送成功；false 表示用户取消或多次失败。
     /// </summary>
-    private bool PushWithRetry(string dir, string branch, string repoFull)
+    private bool PushWithRetry(string dir, string branch, string repoFull, string projectName,
+                               out FriendlyError? lastError)
     {
+        lastError = null;
+
         // 内置登录（OAuth）时用带 token 的临时地址推送，确保 push 与建仓使用同一账号；
         // 否则 git 会走本地 credential helper，可能是另一个 gh 账号，导致 403。
         // 该地址只在命令行使用，**不写入本地 git 配置**。
         var pushUrl = BuildRemoteUrl(repoFull);
         var authed = pushUrl.Contains("x-access-token:", StringComparison.Ordinal);
 
+        // 推送的等待上限：首次 5 分钟；用户选择重试后逐步延长（大仓库首次推送确实可能要很久）
+        var pushTimeoutMs = PushTimeoutMs;
+
         for (int attempt = 1; attempt <= MaxPushRetries; attempt++)
         {
-            var push = authed
-                ? GitService.PushTo(dir, pushUrl, branch)
-                : GitService.Push(dir, branch, setUpstream: true);
+            ProcessResult push;
+            try
+            {
+                push = authed
+                    ? GitService.PushTo(dir, pushUrl, branch, pushTimeoutMs)
+                    : GitService.Push(dir, branch, setUpstream: true, timeoutMs: pushTimeoutMs);
+            }
+            catch (TimeoutException)
+            {
+                // 推送超时（进程被 Kill）不是 git 返回的错误，没有可解析的输出。
+                // 这里必须恢复"网络慢，是否继续重试 / 取消"的提示 —— 否则用户只看到一句"失败：命令超时"，
+                // 既不知道原因，也没有重试的机会。
+                var fe = ErrorTranslator.Timeout(pushTimeoutMs / 1000);
+                lastError = fe;
+                Emit($"✗ 第 {attempt} 次推送超时：已等待 {pushTimeoutMs / 1000} 秒仍未完成");
+                Stage($"推送超时（已等待 {pushTimeoutMs / 1000} 秒）");
+
+                bool retryTimeout = PushFailedPrompt != null
+                    ? PushFailedPrompt(fe, projectName)
+                    : attempt < MaxPushRetries;
+                if (!retryTimeout) return false;
+
+                pushTimeoutMs = Math.Min(pushTimeoutMs * 2, PushTimeoutMaxMs);
+                Stage($"正在重试推送（本次最多等待 {pushTimeoutMs / 1000} 秒）...");
+                continue;
+            }
+
             if (push.Succeeded) return true;
 
             var err = push.CombinedOutput;
-            Emit($"✗ 第 {attempt} 次推送失败：{err}");
+            var friendly = ErrorTranslator.Translate(err);
+            lastError = friendly;
+
+            // 日志里同时给出通俗结论与原始信息：普通用户看前者，开发者看后者
+            Emit($"✗ 第 {attempt} 次推送失败：{friendly.Title}（{friendly.Category}）");
+            Emit($"   {friendly.Explanation}");
+            Emit($"   原始信息：{err}");
 
             if (IsDivergenceError(err))
             {
                 // 远程有本地没有的提交（如自动创建 README 产生的提交）：先合并再重试，无需用户确认
                 Emit("ℹ 远程分支有本地未包含的提交，自动进行 pull --rebase 合并后重试...");
                 Stage($"检测到远程变更，正在合并...（{attempt}/{MaxPushRetries}）");
-                var pull = authed
-                    ? GitService.PullRebaseFrom(dir, pushUrl, branch)
-                    : ProcessRunner.Run("git", $"pull --rebase origin {branch}", dir, timeoutMs: 120000);
-                if (!pull.Succeeded)
+                try
                 {
-                    Emit($"✗ pull --rebase 失败：{pull.CombinedOutput}");
+                    var pull = authed
+                        ? GitService.PullRebaseFrom(dir, pushUrl, branch, PullRebaseTimeoutMs)
+                        : ProcessRunner.Run("git", $"pull --rebase origin {branch}", dir, timeoutMs: PullRebaseTimeoutMs);
+                    if (!pull.Succeeded)
+                        Emit($"✗ pull --rebase 失败：{pull.CombinedOutput}");
+                }
+                catch (TimeoutException)
+                {
+                    Emit($"✗ 合并远程变更超时（{PullRebaseTimeoutMs / 1000} 秒），跳过本次合并继续重试");
                 }
                 continue; // 合并后直接进入下一轮尝试（不 sleep 太长）
             }
 
-            bool retry;
-            if (RetryPrompt != null)
+            // 重试必然失败的错误（文件过大、认证失效、仓库不存在…）：
+            // 直接弹一次通俗说明并结束，避免让用户做无意义的重试。
+            if (!friendly.Retryable)
             {
-                // 弹窗询问用户
-                retry = RetryPrompt(err);
+                Stage($"推送失败：{friendly.Title}");
+                PushFailedPrompt?.Invoke(friendly, projectName);
+                return false;
             }
-            else
-            {
-                // 没有界面回调时，前几次自动重试，最后一次放弃
-                retry = attempt < MaxPushRetries;
-            }
+
+            bool retry = PushFailedPrompt != null
+                ? PushFailedPrompt(friendly, projectName)
+                : attempt < MaxPushRetries;
 
             if (!retry) return false;
 
@@ -485,6 +653,70 @@ public class BackupService
             "# 由 GitAutoBackup 自动生成\nnode_modules/\nbin/\nobj/\nDebug/\nRelease/\n.idea/\n.vs/\n.DS_Store\n");
     }
 
+    /// <summary>
+    /// 独立式专用：把本次跳过的超大文件写入源项目的 .gitignore，并从 git 索引移除。
+    ///
+    /// 说明：独立式直接在用户项目里操作，因此这里会改动用户自己的 .gitignore —— 这是必要代价，
+    /// 否则超大文件会被提交并导致 push 被 GitHub 拒绝。移除只针对索引，**本地文件保持不动**。
+    /// 注意：若该文件在此前已被提交进历史，仅移除索引不足以让 push 成功（历史中的大对象仍在），
+    /// 需要用户用 git filter-repo 清理历史，这种情况下日志会给出提示。
+    /// </summary>
+    private void ApplySkippedFilesForStandalone(string src)
+    {
+        if (_skippedFiles.Count == 0) return;
+
+        var rels = _skippedFiles
+            .Select(abs => Path.GetRelativePath(src, abs).Replace('\\', '/'))
+            .Where(r => !r.StartsWith("..") && !Path.IsPathRooted(r))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(EscapeGitIgnorePath)
+            .ToList();
+        if (rels.Count == 0) return;
+
+        try
+        {
+            var file = Path.Combine(src, ".gitignore");
+            var lines = File.Exists(file)
+                ? File.ReadAllLines(file).ToList()
+                : new List<string> { "# 由 GitAutoBackup 自动生成" };
+
+            // 避免重复追加
+            var existing = new HashSet<string>(lines, StringComparer.OrdinalIgnoreCase);
+            var toAdd = rels.Where(r => !existing.Contains(r)).ToList();
+            if (toAdd.Count > 0)
+            {
+                lines.Add("# 以下文件超过 GitHub 单文件 100MB 上限，由 GitAutoBackup 自动跳过");
+                lines.AddRange(toAdd);
+                File.WriteAllLines(file, lines);
+            }
+
+            // 从索引移除（保留本地文件），使本次提交不再包含它们
+            foreach (var rel in rels) GitService.RemoveFromIndex(src, rel);
+
+            Emit($"  已在 .gitignore 中忽略这 {rels.Count} 个文件，并从 git 索引移除（本地文件未删除）。");
+            Emit("  ⚠ 若这些文件在更早的提交中已入库，push 仍会失败 —— 那种情况需要用 git filter-repo 清理历史。");
+        }
+        catch (Exception ex)
+        {
+            Emit($"  ⚠ 跳过超大文件时出错（{ex.Message}），可能仍会推送失败。");
+        }
+    }
+
+    /// <summary>
+    /// .gitignore 中的路径含 glob 特殊字符（[]*?）时会被当作通配符，导致误匹配其他文件，
+    /// 因此需要转义。反斜杠在 .gitignore 里即转义符。
+    /// </summary>
+    private static string EscapeGitIgnorePath(string path)
+    {
+        var sb = new System.Text.StringBuilder(path.Length + 8);
+        foreach (var c in path)
+        {
+            if (c is '[' or ']' or '*' or '?' or '\\') sb.Append('\\');
+            sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>把全局+项目自定义排除规则追加到指定目录的 .gitignore（独立式 git add 时跳过）。</summary>
     private static void AppendExcludesToGitIgnore(string dir, BackupJob job, Settings settings)
     {
@@ -519,8 +751,10 @@ public class BackupService
     /// <summary>
     /// 递归复制目录。nameExcluded(dirName/fileName) 返回 true 时跳过该项（自定义排除规则）。
     /// 硬编码的 ExcludedDirNames（.git 等）始终排除。
+    /// filePathSkipped(绝对路径) 返回 true 时跳过该文件（用于跳过超过 GitHub 上限的超大文件）。
     /// </summary>
-    public static void CopyDirectory(string sourceDir, string destDir, Func<string, bool> nameExcluded)
+    public static void CopyDirectory(string sourceDir, string destDir, Func<string, bool> nameExcluded,
+                                     Func<string, bool>? filePathSkipped = null)
     {
         Directory.CreateDirectory(destDir);
         foreach (var dir in Directory.GetDirectories(sourceDir))
@@ -528,12 +762,13 @@ public class BackupService
             var name = Path.GetFileName(dir);
             if (ExcludedDirNames.Contains(name)) continue;
             if (nameExcluded(name)) continue;
-            CopyDirectory(dir, Path.Combine(destDir, name), nameExcluded);
+            CopyDirectory(dir, Path.Combine(destDir, name), nameExcluded, filePathSkipped);
         }
         foreach (var file in Directory.GetFiles(sourceDir))
         {
             var name = Path.GetFileName(file);
             if (nameExcluded(name)) continue;
+            if (filePathSkipped?.Invoke(Path.GetFullPath(file)) == true) continue;
             File.Copy(file, Path.Combine(destDir, name), overwrite: true);
         }
     }

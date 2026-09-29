@@ -211,7 +211,8 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         _backup = new BackupService();
         _backup.Log += (msg) => AppendLog(msg);
         _backup.StageChanged += (msg) => RunOnUi(() => StatusText = msg);
-        _backup.RetryPrompt += (err) => AskRetry(err);
+        _backup.PushFailedPrompt = (err, project) => AskPushFailed(err, project);
+        _backup.LargeFilePrompt = (req) => AskSkipLargeFiles(req);
 
         foreach (var j in _settings.Jobs) Jobs.Add(j);
 
@@ -282,28 +283,53 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         var task = AddTask("检测 GitHub 账号");
         System.Threading.Tasks.Task.Run(() =>
         {
-            var acc = GitHubService.GetAccount();
+            // gh 调用可能超时并抛异常（ProcessRunner 超时即抛），必须兜住，
+            // 否则下面的 RunOnUi 整块会被跳过，SetBusyState(false) 永不执行 → 底部进度条永久转动。
+            string acc = string.Empty;
+            string? error = null;
+            try
+            {
+                acc = GitHubService.GetAccount();
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                AppendLog("检测账号异常：" + ex.Message);
+            }
+
             RunOnUi(() =>
             {
-                if (!string.IsNullOrWhiteSpace(acc))
+                try
                 {
-                    _settings.GitHubAccount = acc;
-                    OnPropertyChanged(nameof(AccountText));
-                    SetBusyState(false, $"√ 已检测到账号 {acc}");
-                    CompleteTask(task, true, $"账号 {acc}");
+                    if (!string.IsNullOrWhiteSpace(acc))
+                    {
+                        _settings.GitHubAccount = acc;
+                        OnPropertyChanged(nameof(AccountText));
+                        SetBusyState(false, $"√ 已检测到账号 {acc}");
+                        CompleteTask(task, true, $"账号 {acc}");
+                    }
+                    else
+                    {
+                        SetBusyState(false, error != null ? "✗ 检测账号失败" : "✗ 未检测到账号");
+                        CompleteTask(task, false, error != null ? "检测失败" : "未检测到（可点「登录 GitHub」）");
+                        AppendLog(error != null
+                            ? $"检测账号失败：{error}"
+                            : "未检测到 GitHub 账号：可点「登录 GitHub」内置登录，或用 gh auth login。");
+                    }
+                    Save();
                 }
-                else
+                finally
                 {
-                    SetBusyState(false, "✗ 未检测到账号");
-                    CompleteTask(task, false, "未检测到（可点「登录 GitHub」）");
-                    AppendLog("未检测到 GitHub 账号：可点「登录 GitHub」内置登录，或用 gh auth login。");
+                    // 兜底：任何意外都不能让忙碌状态卡住（只复位忙碌标志，不改状态文字）
+                    IsBusy = false;
                 }
-                Save();
             });
         });
     }
 
-    /// <summary>解锁删除权限：已内置登录则重新授权追加 delete_repo；否则走 gh（内置终端）。</summary>
+    /// <summary>
+    /// 解锁删除权限：已内置登录则重新授权追加 delete_repo；否则走 gh（内置终端）。
+    /// </summary>
     private void UnlockDeleteScope()
     {
         if (GitHubAuthService.HasToken)
@@ -317,9 +343,70 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         IsLogVisible = true;
         var task = AddTask("解锁删除权限（gh 方式）");
         AppendLog("正在内置终端里请求删除仓库权限（delete_repo），请在终端里按提示完成授权...");
-        StatusText = "等待浏览器授权...";
+        SetBusyState(true, "等待浏览器授权...");
         TerminalCommandRequested?.Invoke("gh auth refresh -s delete_repo -h github.com");
         CompleteTask(task, true, "已发起，请在终端完成授权");
+
+        // gh 授权在终端/浏览器里进行，程序拿不到完成信号，只能轮询检测权限是否已开通。
+        StartDeleteScopeWatch(task);
+    }
+
+    /// <summary>删除权限状态发生变化（检测到已开通）时通知各页面刷新。</summary>
+    public event Action? DeleteScopeChanged;
+
+    /// <summary>请求停止删除权限的后台轮询（例如用户已手动刷新确认开通）。</summary>
+    private volatile bool _deleteScopeWatchStop;
+
+    /// <summary>已通过其他途径确认权限状态，停止后台轮询，避免无谓地反复调用 gh。</summary>
+    public void StopDeleteScopeWatch() => _deleteScopeWatchStop = true;
+
+    /// <summary>
+    /// 轮询检测删除权限是否已开通。
+    ///
+    /// 背景：gh 的授权流程跑在内置终端里，用户在浏览器完成后，软件侧没有任何回调可用，
+    /// 若不轮询就会出现「已经授权成功，但界面一直显示等待浏览器授权」的错觉。
+    /// 检测到开通后复位状态栏、更新任务记录，并通知「GitHub 仓库」页刷新权限文字。
+    /// </summary>
+    private void StartDeleteScopeWatch(TaskRecord task)
+    {
+        _deleteScopeWatchStop = false;
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            // 最多等 3 分钟，每 3 秒检测一次（授权通常在一分钟内完成）
+            const int maxWaitMs = 3 * 60 * 1000;
+            const int intervalMs = 3000;
+
+            for (var waited = 0; waited < maxWaitMs; waited += intervalMs)
+            {
+                System.Threading.Thread.Sleep(intervalMs);
+                if (_deleteScopeWatchStop) return;
+
+                bool ok;
+                try { ok = GitHubService.HasDeleteScope(); }
+                catch { continue; }   // 单次检测失败不影响整体等待
+
+                if (!ok) continue;
+
+                RunOnUi(() =>
+                {
+                    SetBusyState(false, "√ 删除权限已开通");
+                    CompleteTask(task, true, "已开通");
+                    AppendLog("√ 已检测到删除权限开通，现在可以删除 GitHub 仓库了。");
+                    DeleteScopeChanged?.Invoke();
+                });
+                return;
+            }
+
+            if (_deleteScopeWatchStop) return;
+
+            RunOnUi(() =>
+            {
+                SetBusyState(false, "授权未完成");
+                CompleteTask(task, false, "等待超时");
+                AppendLog("ℹ 等待删除权限授权超时（3 分钟）。若你已完成授权，可点「GitHub 仓库」页的「刷新」重新检测。");
+            });
+        });
     }
 
     /// <summary>内置登录：申请设备码 → 弹框等待授权 → 保存 token → 拉取账号与头像。</summary>
@@ -329,33 +416,48 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         SetBusyState(true, "正在获取设备码 ...");
         System.Threading.Tasks.Task.Run(() =>
         {
-            var info = GitHubAuthService.RequestDeviceCode(scope, out var error);
-            RunOnUi(() =>
+            try
             {
-                SetBusyState(false, "就绪");
-                if (info == null)
+                var info = GitHubAuthService.RequestDeviceCode(scope, out var error);
+                RunOnUi(() =>
                 {
-                    CompleteTask(task, false, "获取设备码失败");
-                    AppendLog("获取设备码失败：" + error);
-                    return;
-                }
+                    SetBusyState(false, "就绪");
+                    if (info == null)
+                    {
+                        CompleteTask(task, false, "获取设备码失败");
+                        AppendLog("获取设备码失败：" + error);
+                        return;
+                    }
 
-                var dlg = new Views.LoginDialog(info)
+                    var dlg = new Views.LoginDialog(info)
+                    {
+                        Owner = System.Windows.Application.Current?.MainWindow
+                    };
+                    if (dlg.ShowDialog() == true && !string.IsNullOrEmpty(dlg.Token))
+                    {
+                        GitHubAuthService.SaveToken(dlg.Token);
+                        CompleteTask(task, true, "已登录");
+                        SetBusyState(false, "√ 已登录 GitHub");
+                        // 重新授权可能追加了 delete_repo 范围，通知页面刷新权限状态
+                        DeleteScopeChanged?.Invoke();
+                        RefreshAccount(withAvatar: true);
+                    }
+                    else
+                    {
+                        CompleteTask(task, false, "已取消");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                // 取设备码阶段异常（网络/超时等）：同样要复位忙碌状态并告知用户
+                RunOnUi(() =>
                 {
-                    Owner = System.Windows.Application.Current?.MainWindow
-                };
-                if (dlg.ShowDialog() == true && !string.IsNullOrEmpty(dlg.Token))
-                {
-                    GitHubAuthService.SaveToken(dlg.Token);
-                    CompleteTask(task, true, "已登录");
-                    SetBusyState(false, "√ 已登录 GitHub");
-                    RefreshAccount(withAvatar: true);
-                }
-                else
-                {
-                    CompleteTask(task, false, "已取消");
-                }
-            });
+                    SetBusyState(false, "✗ 获取设备码失败");
+                    CompleteTask(task, false, "获取设备码失败");
+                    AppendLog("获取设备码失败：" + ex.Message);
+                });
+            }
         });
     }
 
@@ -376,21 +478,30 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
     {
         System.Threading.Tasks.Task.Run(() =>
         {
-            var profile = GitHubService.GetUserProfile();
-            RunOnUi(() =>
+            try
             {
-                if (profile is { Login.Length: > 0 } p)
+                var profile = GitHubService.GetUserProfile();
+                RunOnUi(() =>
                 {
-                    _settings.GitHubAccount = p.Login;
-                    OnPropertyChanged(nameof(AccountText));
-                    OnPropertyChanged(nameof(IsLoggedIn));
-                    OnPropertyChanged(nameof(LoginStatusText));
-                    if (withAvatar && !string.IsNullOrWhiteSpace(p.AvatarUrl))
-                        AvatarService.Ensure(p.Login, p.AvatarUrl);
-                    Save();
-                }
-                LoadAvatar();
-            });
+                    if (profile is { Login.Length: > 0 } p)
+                    {
+                        _settings.GitHubAccount = p.Login;
+                        OnPropertyChanged(nameof(AccountText));
+                        OnPropertyChanged(nameof(IsLoggedIn));
+                        OnPropertyChanged(nameof(LoginStatusText));
+                        if (withAvatar && !string.IsNullOrWhiteSpace(p.AvatarUrl))
+                            AvatarService.Ensure(p.Login, p.AvatarUrl);
+                        Save();
+                    }
+                    LoadAvatar();
+                });
+            }
+            catch (Exception ex)
+            {
+                // 获取账号/头像失败不应影响其他功能，只记录并回退到本地缓存头像
+                AppendLog("刷新账号信息失败：" + ex.Message);
+                RunOnUi(LoadAvatar);
+            }
         });
     }
 
@@ -613,18 +724,25 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
 
             RunOnUi(() =>
             {
-                var jobs = Jobs.Where(j => j.Mode == BackupMode.Consolidated
-                        && string.Equals(j.ConsolidatedRepoName, repoName, StringComparison.OrdinalIgnoreCase)).ToList();
-                foreach (var j in jobs) { Jobs.Remove(j); _settings.Jobs.Remove(j); }
+                try
+                {
+                    var jobs = Jobs.Where(j => j.Mode == BackupMode.Consolidated
+                            && string.Equals(j.ConsolidatedRepoName, repoName, StringComparison.OrdinalIgnoreCase)).ToList();
+                    foreach (var j in jobs) { Jobs.Remove(j); _settings.Jobs.Remove(j); }
 
-                ConsolidatedRepos.Remove(repoName);
-                _settings.ConsolidatedRepos.Remove(repoName);
+                    ConsolidatedRepos.Remove(repoName);
+                    _settings.ConsolidatedRepos.Remove(repoName);
 
-                Save();
-                IsBusy = false;
-                StatusText = "就绪";
-                CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? "已删除" : "已删除（部分失败）");
-                if (!string.IsNullOrEmpty(error)) AppendLog($"删除集中仓库 {repoName} 出现问题：{error}");
+                    Save();
+                    StatusText = "就绪";
+                    CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? "已删除" : "已删除（部分失败）");
+                    if (!string.IsNullOrEmpty(error)) AppendLog($"删除集中仓库 {repoName} 出现问题：{error}");
+                }
+                finally
+                {
+                    // 兜底：清理过程出错也不能让忙碌状态卡住
+                    IsBusy = false;
+                }
             });
         });
     }
@@ -654,13 +772,19 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
 
             RunOnUi(() =>
             {
-                Jobs.Remove(job);
-                _settings.Jobs.Remove(job);
-                Save();
-                IsBusy = false;
-                StatusText = "就绪";
-                CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? "已删除" : "已删除（部分失败）");
-                if (!string.IsNullOrEmpty(error)) AppendLog($"删除独立仓库 {repoFull} 出现问题：{error}");
+                try
+                {
+                    Jobs.Remove(job);
+                    _settings.Jobs.Remove(job);
+                    Save();
+                    StatusText = "就绪";
+                    CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? "已删除" : "已删除（部分失败）");
+                    if (!string.IsNullOrEmpty(error)) AppendLog($"删除独立仓库 {repoFull} 出现问题：{error}");
+                }
+                finally
+                {
+                    IsBusy = false;
+                }
             });
         });
     }
@@ -698,15 +822,21 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         var list = jobs as BackupJob[] ?? jobs.ToArray();
         var task = AddTask($"备份 {list.Length} 个项目");
 
+        // 每批次重置「其余项目也跳过超大文件」的选择，避免上次的选择影响本次
+        _skipLargeFilesForRest = false;
+
         // 需在 UI 线程切换 IsBusy，因为绑定要求
         RunOnUi(() => { IsBusy = true; StatusText = "正在备份..."; });
+
+        var okCount = 0;
+        var failures = new List<(string name, string reason)>();
         try
         {
-            var okCount = 0;
             foreach (var job in list)
             {
                 // 「状态 / 最近备份」由 BackupJob 自身通知（已切回 UI 线程），无需整表刷新
                 if (_backup.RunJob(job, _settings)) okCount++;
+                else failures.Add((job.ProjectName, job.LastStatus));
             }
             Save();
             CompleteTask(task, okCount == list.Length, $"{okCount}/{list.Length} 成功");
@@ -715,13 +845,64 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         {
             CompleteTask(task, false, "备份异常");
             AppendLog("备份异常：" + ex.Message);
+            failures.Add(("（整体流程）", "程序异常：" + ex.Message));
         }
         finally
         {
             _settings.LastRunAt = DateTime.Now;
             Save();
-            RunOnUi(() => { IsBusy = false; StatusText = "就绪"; });
+
+            if (failures.Count == 0)
+            {
+                RunOnUi(() =>
+                {
+                    IsBusy = false;
+                    StatusText = $"√ 备份完成（{okCount}/{list.Length} 成功）";
+                });
+            }
+            else
+            {
+                var failCount = failures.Count;
+                RunOnUi(() =>
+                {
+                    IsBusy = false;
+                    StatusText = $"备份完成：{okCount} 成功 / {failCount} 失败";
+                });
+                // 有失败时主动弹窗汇总 —— 避免失败结果只出现在小字日志里被忽略
+                ShowFailureSummary(failures, list.Length, okCount);
+            }
         }
+    }
+
+    /// <summary>批量备份结束后，若有项目失败，弹窗汇总说明（每个项目给一句通俗原因）。</summary>
+    private void ShowFailureSummary(List<(string name, string reason)> failures, int total, int okCount)
+    {
+        RunOnUi(() =>
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"本次备份共 {total} 个项目：{okCount} 个成功，{failures.Count} 个失败。");
+                sb.AppendLine();
+                sb.AppendLine("失败的项目：");
+                foreach (var (name, reason) in failures.Take(10))
+                    sb.AppendLine($"    · {name} —— {reason}");
+                if (failures.Count > 10)
+                    sb.AppendLine($"    · …另有 {failures.Count - 10} 个项目失败");
+                sb.AppendLine();
+                sb.AppendLine("完整的原始报错可在下方「日志」面板查看。");
+
+                System.Windows.MessageBox.Show(
+                    sb.ToString(),
+                    "备份未全部完成",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Warning);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("显示失败汇总时出错：" + ex.Message);
+            }
+        });
     }
 
     private void UpdateTimer()
@@ -762,6 +943,18 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
             OnPropertyChanged(nameof(LogText));
         });
     }
+
+    /// <summary>供其他 ViewModel 写程序日志（落盘 + 界面同步）。</summary>
+    public void Log(string message) => AppendLog(message);
+
+    /// <summary>
+    /// 仅更新状态栏文字，不触碰忙碌标志。
+    /// 供各页面报告轻量结果（如"权限检测完成"），避免误复位正在进行的备份的忙碌状态。
+    /// </summary>
+    public void SetStatus(string text) => RunOnUi(() =>
+    {
+        if (!string.IsNullOrEmpty(text)) StatusText = text;
+    });
 
     /// <summary>按关键词粗略判定日志级别，仅用于文件里的标签，不影响界面显示。</summary>
     private static LogLevel GuessLevel(string msg)
@@ -806,20 +999,76 @@ public class MainViewModel : INotifyPropertyChanged, IDisposable
         SetBusyState(false, "日志已清空");
     }
 
-    /// <summary>在 UI 线程弹出推送失败对话框，询问是否重试（阻塞等待用户选择）。返回 true=重试。</summary>
-    private bool AskRetry(string error)
+    /// <summary>本批次备份中，用户勾选「其余项目也这样处理」后置为 true，后续超大文件不再弹窗。</summary>
+    private bool _skipLargeFilesForRest;
+
+    /// <summary>
+    /// 备份前发现超过 GitHub 单文件上限的文件时弹窗，请用户决定。
+    /// 阻塞等待用户选择（备份本身在后台线程执行，UI 线程可正常响应）。
+    /// 返回 true=跳过这些文件并继续备份，false=取消本次备份。
+    /// </summary>
+    private bool AskSkipLargeFiles(LargeFileRequest req)
     {
-        bool result = false;
+        var result = false;
         RunOnUi(() =>
         {
-            StatusText = "推送失败，等待你的选择...";
-            var r = System.Windows.MessageBox.Show(
-                "推送备份到 GitHub 失败。\n\n原始报错：\n" + error + "\n\n是否重试？",
-                "GitAutoBackup - 推送失败",
-                System.Windows.MessageBoxButton.YesNo,
-                System.Windows.MessageBoxImage.Warning);
-            result = r == System.Windows.MessageBoxResult.Yes;
-            StatusText = "已处理推送失败";
+            // 用户已选择"其余项目也这样处理"
+            if (_skipLargeFilesForRest)
+            {
+                AppendLog($"⚠ [{req.ProjectName}] 已按上次选择自动跳过 {req.Scan.BlockingFiles.Count} 个超大文件。");
+                result = true;
+                return;
+            }
+
+            StatusText = "发现超大文件，等待你的选择...";
+            try
+            {
+                var dlg = new Views.LargeFileDialog(req.ProjectName, req.Scan);
+                var main = System.Windows.Application.Current?.MainWindow;
+                // 主窗口已显示才能设 Owner，否则设 CenterScreen 避免异常
+                if (main != null && main.IsLoaded) dlg.Owner = main;
+                else dlg.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
+
+                result = dlg.ShowDialog() == true && dlg.SkipThem;
+                if (result && dlg.ApplyToRest) _skipLargeFilesForRest = true;
+            }
+            catch (Exception ex)
+            {
+                AppendLog("超大文件确认对话框出错：" + ex.Message);
+                result = false;
+            }
+            StatusText = result ? "已选择跳过超大文件，继续备份" : "已取消备份";
+        });
+        return result;
+    }
+
+    /// <summary>
+    /// 推送失败时弹出通俗易懂的说明（而不是让用户读 git 原始报错）。
+    /// 阻塞等待用户选择（备份在后台线程执行，UI 线程可正常响应）。
+    /// 返回 true=重试；false=结束本次备份。对"重试必然失败"的错误，弹窗不提供重试按钮，故一定返回 false。
+    /// </summary>
+    private bool AskPushFailed(FriendlyError error, string projectName)
+    {
+        var result = false;
+        RunOnUi(() =>
+        {
+            StatusText = error.Title;
+            try
+            {
+                var dlg = new Views.PushFailedDialog(projectName, error);
+                var main = System.Windows.Application.Current?.MainWindow;
+                if (main != null && main.IsLoaded) dlg.Owner = main;
+                else dlg.WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen;
+
+                dlg.ShowDialog();
+                result = dlg.RetryRequested;
+            }
+            catch (Exception ex)
+            {
+                AppendLog("推送失败提示框出错：" + ex.Message);
+                result = false;
+            }
+            StatusText = result ? "将重试推送" : $"推送失败：{error.Title}";
         });
         return result;
     }

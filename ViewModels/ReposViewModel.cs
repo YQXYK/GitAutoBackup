@@ -40,8 +40,24 @@ public class ReposViewModel : INotifyPropertyChanged
         }
     }
 
-    /// <summary>删除权限状态文本。</summary>
-    public string DeleteScopeStatusText => _hasDeleteScope ? "删除权限已开通" : "删除权限未开通";
+    private bool _deleteScopeChecked;
+    /// <summary>是否成功完成过一次权限检测（用于区分"未开通"与"检测失败"）。</summary>
+    public bool DeleteScopeChecked
+    {
+        get => _deleteScopeChecked;
+        private set
+        {
+            if (_deleteScopeChecked == value) return;
+            _deleteScopeChecked = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DeleteScopeStatusText));
+        }
+    }
+
+    /// <summary>删除权限状态文本：区分「已开通 / 未开通 / 检测失败」，避免检测异常时误报为"未开通"。</summary>
+    public string DeleteScopeStatusText => !_deleteScopeChecked
+        ? "权限状态未知（检测失败）"
+        : _hasDeleteScope ? "删除权限已开通" : "删除权限未开通";
 
     public ICommand RefreshDeleteScopeCommand { get; }
 
@@ -54,6 +70,8 @@ public class ReposViewModel : INotifyPropertyChanged
     public ICommand DeleteCommand { get; }
 
     private bool _isLoading;
+    /// <summary>本次加载的开始时间，用于超时兜底（防止异常导致永久卡在"加载中"）。</summary>
+    private DateTime _loadStartedAt;
     public bool IsLoading
     {
         get => _isLoading;
@@ -82,11 +100,21 @@ public class ReposViewModel : INotifyPropertyChanged
         {
             if (e.PropertyName == nameof(MainViewModel.AccountText)) OnPropertyChanged(nameof(AccountText));
         };
+
+        // 删除权限可能在别处开通（内置终端完成 gh 授权 / 重新登录追加范围），
+        // 开通后主页会广播该事件，这里自动重新检测，无需用户手动点「刷新」。
+        main.DeleteScopeChanged += RefreshDeleteScope;
     }
 
     private void Load()
     {
-        if (_isLoading) return;
+        // 防重入：上次仍在加载则忽略本次请求。
+        // 但加超时兜底 —— 若上次加载超过 30 秒仍未结束（异常导致状态未复位），允许重新加载，
+        // 否则界面会永久卡在"加载中"且刷新失效（只能重启程序）。
+        if (_isLoading && (DateTime.UtcNow - _loadStartedAt).TotalSeconds < 30) return;
+
+        _isLoading = true;
+        _loadStartedAt = DateTime.UtcNow;
         IsLoading = true;
         Message = "正在获取仓库列表...";
         var task = _main.AddTask("获取仓库列表");
@@ -94,20 +122,47 @@ public class ReposViewModel : INotifyPropertyChanged
 
         System.Threading.Tasks.Task.Run(() =>
         {
-            var list = GitHubService.ListRepos(out var error);
-            RunOnUi(() =>
+            // 1. 取数据：底层即便抛异常也要兜住，否则下面的状态复位永远不会执行
+            var list = new List<GitHubRepo>();
+            string? error = null;
+            try
             {
-                Repos.Clear();
-                foreach (var r in list) Repos.Add(r);
-                IsLoading = false;
-                Message = !string.IsNullOrEmpty(error)
-                    ? "获取失败：" + error
-                    : list.Count == 0
-                        ? "没有找到仓库（可在左下角账号入口登录，或执行 gh auth login）。"
-                        : $"共 {list.Count} 个仓库（按最近更新排序）。";
+                list = GitHubService.ListRepos(out error);
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                _main.Log("获取仓库列表异常：" + ex.Message);
+            }
+
+            // 2. 更新界面
+            try
+            {
+                RunOnUi(() =>
+                {
+                    Repos.Clear();
+                    foreach (var r in list) Repos.Add(r);
+                    Message = !string.IsNullOrEmpty(error)
+                        ? "获取失败：" + error
+                        : list.Count == 0
+                            ? "没有找到仓库（可在左下角账号入口登录，或执行 gh auth login）。"
+                            : $"共 {list.Count} 个仓库（按最近更新排序）。";
+                });
+            }
+            catch (Exception ex)
+            {
+                error ??= ex.Message;
+                _main.Log("刷新仓库列表界面失败：" + ex.Message);
+            }
+            finally
+            {
+                // 3. 无论如何都要解除"加载中"，并复位底部状态栏进度条
+                _isLoading = false;
+                RunOnUi(() => IsLoading = false);
                 _main.SetBusyState(false, string.IsNullOrEmpty(error) ? $"已加载 {list.Count} 个仓库" : "✗ 获取仓库列表失败");
-                _main.CompleteTask(task, string.IsNullOrEmpty(error), string.IsNullOrEmpty(error) ? $"已加载 {list.Count} 个仓库" : "获取失败");
-            });
+                _main.CompleteTask(task, string.IsNullOrEmpty(error),
+                    string.IsNullOrEmpty(error) ? $"已加载 {list.Count} 个仓库" : "获取失败");
+            }
         });
     }
 
@@ -134,24 +189,35 @@ public class ReposViewModel : INotifyPropertyChanged
             try { GitHubService.UpdateRepo(repo.FullName, isPrivate, description, out error); }
             catch (Exception ex) { error = ex.Message; }
 
-            RunOnUi(() =>
+            try
             {
-                if (string.IsNullOrEmpty(error))
+                RunOnUi(() =>
                 {
-                    // 这两个属性带变更通知，改完表格行会实时刷新
-                    repo.IsPrivate = isPrivate;
-                    repo.Description = description;
-                    Message = $"已更新仓库：{repo.FullName}";
-                    _main.SetBusyState(false, $"√ 已更新仓库 {repo.FullName}");
-                    _main.CompleteTask(task, true, "已更新");
-                }
-                else
-                {
-                    Message = $"更新失败：{error}";
-                    _main.SetBusyState(false, "✗ 更新仓库失败");
-                    _main.CompleteTask(task, false, "更新失败");
-                }
-            });
+                    if (string.IsNullOrEmpty(error))
+                    {
+                        // 这两个属性带变更通知，改完表格行会实时刷新
+                        repo.IsPrivate = isPrivate;
+                        repo.Description = description;
+                        Message = $"已更新仓库：{repo.FullName}";
+                    }
+                    else
+                    {
+                        Message = $"更新失败：{error}";
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                error ??= ex.Message;
+                _main.Log("更新仓库后刷新界面失败：" + ex.Message);
+            }
+            finally
+            {
+                // 无论成功失败都要复位忙碌状态，否则底部进度条会一直转
+                var ok = string.IsNullOrEmpty(error);
+                _main.SetBusyState(false, ok ? $"√ 已更新仓库 {repo.FullName}" : "✗ 更新仓库失败");
+                _main.CompleteTask(task, ok, ok ? "已更新" : "更新失败");
+            }
         });
     }
 
@@ -176,32 +242,65 @@ public class ReposViewModel : INotifyPropertyChanged
             try { GitHubService.DeleteRepo(repo.FullName, out error); }
             catch (Exception ex) { error = ex.Message; }
 
-            RunOnUi(() =>
+            try
             {
-                if (string.IsNullOrEmpty(error))
+                RunOnUi(() =>
                 {
-                    Repos.Remove(repo);
-                    Message = $"已删除仓库：{repo.FullName}";
-                    _main.SetBusyState(false, $"√ 已删除仓库 {repo.FullName}");
-                    _main.CompleteTask(task, true, "已删除");
-                }
-                else
-                {
-                    Message = $"删除失败：{error}";
-                    _main.SetBusyState(false, "✗ 删除仓库失败");
-                    _main.CompleteTask(task, false, "删除失败");
-                }
-            });
+                    if (string.IsNullOrEmpty(error))
+                    {
+                        Repos.Remove(repo);
+                        Message = $"已删除仓库：{repo.FullName}";
+                    }
+                    else
+                    {
+                        Message = $"删除失败：{error}";
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                error ??= ex.Message;
+                _main.Log("删除仓库后刷新界面失败：" + ex.Message);
+            }
+            finally
+            {
+                var ok = string.IsNullOrEmpty(error);
+                _main.SetBusyState(false, ok ? $"√ 已删除仓库 {repo.FullName}" : "✗ 删除仓库失败");
+                _main.CompleteTask(task, ok, ok ? "已删除" : "删除失败");
+            }
         });
     }
 
-    /// <summary>检测当前 token 是否已开通 delete_repo 权限。</summary>
+    /// <summary>检测当前 token 是否已开通 delete_repo 权限。异常时标记为"检测失败"而非"未开通"。</summary>
     private void RefreshDeleteScope()
     {
         System.Threading.Tasks.Task.Run(() =>
         {
-            var has = GitHubService.HasDeleteScope();
-            RunOnUi(() => HasDeleteScope = has);
+            bool has = false;
+            bool ok = false;
+            try
+            {
+                has = GitHubService.HasDeleteScope();
+                ok = true;
+            }
+            catch (Exception ex)
+            {
+                _main.Log("检测删除权限失败：" + ex.Message);
+            }
+
+            RunOnUi(() =>
+            {
+                DeleteScopeChecked = ok;
+                HasDeleteScope = has;
+
+                // 已确认开通：若主页还在后台轮询等待授权，让它停下，免得白跑 gh 进程
+                if (ok && has) _main.StopDeleteScopeWatch();
+
+                // 给状态栏一个明确反馈：否则用户点完「刷新」后，下面还停在旧的提示文字上
+                _main.SetStatus(ok
+                    ? (has ? "√ 删除权限已开通" : "删除权限未开通")
+                    : "✗ 权限检测失败");
+            });
         });
     }
 
